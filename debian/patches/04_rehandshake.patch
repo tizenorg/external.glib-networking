@@ -1,0 +1,24 @@
+From ce16e682c97afb05741c5e37924685c2a1c1ef80 Mon Sep 17 00:00:00 2001
+From: Dan Winship <danw@gnome.org>
+Date: Thu, 25 Aug 2011 22:53:42 +0000
+Subject: gnutls: handle rehandshake request correctly
+
+Based on a patch from Igor Makarov
+
+https://bugzilla.gnome.org/show_bug.cgi?id=653645
+---
+diff --git a/tls/gnutls/gtlsconnection-gnutls.c b/tls/gnutls/gtlsconnection-gnutls.c
+index 7cb7f9c..0882852 100644
+--- a/tls/gnutls/gtlsconnection-gnutls.c
++++ b/tls/gnutls/gtlsconnection-gnutls.c
+@@ -575,7 +575,7 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
+             ret == GNUTLS_E_WARNING_ALERT_RECEIVED) &&	\
+            !gnutls->priv->error);			\
+   ret = end_gnutls_io (gnutls, ret, error);		\
+-  if (ret < 0 && error && !*error)			\
++  if (ret < 0 && ret != GNUTLS_E_REHANDSHAKE && error && !*error) \
+     {							\
+       g_set_error (error, G_TLS_ERROR, G_TLS_ERROR_MISC,\
+                    errmsg, gnutls_strerror (ret));	\
+--
+cgit v0.9.0.2

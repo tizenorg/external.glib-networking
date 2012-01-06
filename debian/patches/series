@@ -1,0 +1,6 @@
+01_tls_small_keys.patch
+02_gerror_crash.patch
+03_tls_compat.patch
+04_rehandshake.patch
+05_virtualhosts.patch
+06_gnutls3.patch

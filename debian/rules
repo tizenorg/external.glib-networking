@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+
+DISALLOWED_DISTS =
+
+include /usr/share/cdbs/1/rules/debhelper.mk
+include /usr/share/cdbs/1/rules/utils.mk
+include /usr/share/cdbs/1/class/gnome.mk
+include /usr/share/gnome-pkg-tools/1/rules/uploaders.mk
+include /usr/share/gnome-pkg-tools/1/rules/gnome-get-source.mk
+
+DEB_MAKE_CHECK_TARGET = check
+
+DEB_CONFIGURE_EXTRA_FLAGS += --disable-static
+
+GIO_MODULE_DIR = `pkg-config --variable giomoduledir gio-2.0`
+binary-install/glib-networking::
+	rm debian/glib-networking$(GIO_MODULE_DIR)/*la
+

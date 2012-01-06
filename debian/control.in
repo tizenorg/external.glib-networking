@@ -1,0 +1,36 @@
+Source: glib-networking
+Section: libs
+Priority: optional
+Maintainer: Emilio Pozuelo Monfort <pochu@debian.org>, Taeksu Shin <taeksu.shin@samsung.com>, Dongwook Lee <dwmax.lee@samsung.com>
+Uploaders: Taeksu Shin <taeksu.shin@samsung.com>, Dongwook Lee <dwmax.lee@samsung.com>
+Build-Depends: debhelper (>= 8),
+               cdbs,
+               gnome-pkg-tools,
+               libglib2.0-dev (>= 2.27.90),
+               libgnutls-dev (>= 2.6.6),
+               ca-certificates,
+Vcs-Svn: svn://svn.debian.org/svn/pkg-gnome/desktop/unstable/glib-networking
+Vcs-Browser: http://svn.debian.org/viewsvn/pkg-gnome/desktop/unstable/glib-networking
+Standards-Version: 3.9.2
+
+Package: glib-networking
+Architecture: any
+Depends: ${misc:Depends},
+         ${shlibs:Depends}
+Description: network-related giomodules for GLib
+ This package contains various network related extension points
+ for GLib.
+
+Package: glib-networking-dbg
+Architecture: any
+Priority: extra
+Section: debug
+Depends: ${misc:Depends},
+         ${shlibs:Depends},
+         glib-networking (= ${binary:Version})
+Description: network-related giomodules for GLib (debugging symbols
+ This package contains various network related extension points
+ for GLib.
+ .
+ This package contains the debugging symbols for glib-networking.
+
