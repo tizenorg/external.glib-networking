@@ -2,7 +2,7 @@
 
 Name:       glib-networking
 Summary:    Network extensions for GLib
-Version:    2.28.4
+Version:    2.28.7
 Release:    1
 Group:      System/Libraries
 License:    LGPLv2
