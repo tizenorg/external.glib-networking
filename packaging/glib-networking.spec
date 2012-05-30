@@ -8,6 +8,7 @@ Group:      System/Libraries
 License:    LGPLv2
 URL:        http://git.gnome.org/browse/glib-networking/
 Source0:    http://ftp.gnome.org/pub/gnome/sources/%{name}/2.28/%{name}-%{version}.tar.bz2
+Source1001: packaging/glib-networking.manifest 
 BuildRequires:  pkgconfig(glib-2.0)
 BuildRequires:  pkgconfig(gnutls)
 BuildRequires:  intltool
@@ -24,6 +25,7 @@ Networking extensions for GLib
 
 
 %build
+cp %{SOURCE1001} .
 
 %configure --disable-static \
   --with-ca-certificates=/opt/etc/ssl/certs
@@ -41,6 +43,7 @@ rm -rf %{buildroot}
 
 
 %files -f glib-networking.lang
+%manifest glib-networking.manifest
 %defattr(-,root,root,-)
 %{_libdir}/gio/modules/libgiognutls.so
 
