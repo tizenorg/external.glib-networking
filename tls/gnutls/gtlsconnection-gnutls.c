@@ -127,7 +127,10 @@ struct _GTlsConnectionGnutlsPrivate
 
   GError *error;
   GCancellable *cancellable;
-  gboolean blocking, eof;
+  gboolean blocking;
+#ifndef GNUTLS_E_PREMATURE_TERMINATION
+  gboolean eof;
+#endif
   GIOCondition internal_direction;
 };
 
@@ -189,16 +192,16 @@ g_tls_connection_gnutls_init_priorities (void)
   /* First field is "ssl3 only", second is "allow unsafe rehandshaking" */
 
   gnutls_priority_init (&priorities[FALSE][FALSE],
-			"NORMAL",
+			"NORMAL:%COMPAT",
 			NULL);
   gnutls_priority_init (&priorities[TRUE][FALSE],
-			"NORMAL:!VERS-TLS1.2:!VERS-TLS1.1:!VERS-TLS1.0",
+			"NORMAL:%COMPAT:!VERS-TLS1.2:!VERS-TLS1.1:!VERS-TLS1.0",
 			NULL);
   gnutls_priority_init (&priorities[FALSE][TRUE],
-			"NORMAL:%UNSAFE_RENEGOTIATION",
+			"NORMAL:%COMPAT:%UNSAFE_RENEGOTIATION",
 			NULL);
   gnutls_priority_init (&priorities[TRUE][TRUE],
-			"NORMAL:!VERS-TLS1.2:!VERS-TLS1.1:!VERS-TLS1.0:%UNSAFE_RENEGOTIATION",
+			"NORMAL:%COMPAT:!VERS-TLS1.2:!VERS-TLS1.1:!VERS-TLS1.0:%UNSAFE_RENEGOTIATION",
 			NULL);
 }
 
@@ -505,19 +508,22 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
       gnutls->priv->need_handshake = TRUE;
       return status;
     }
-  else if (status == GNUTLS_E_UNEXPECTED_PACKET_LENGTH)
+  else if (
+#ifdef GNUTLS_E_PREMATURE_TERMINATION
+	   status == GNUTLS_E_PREMATURE_TERMINATION
+#else
+	   status == GNUTLS_E_UNEXPECTED_PACKET_LENGTH && gnutls->priv->eof
+#endif
+	   )
     {
-      if (gnutls->priv->eof)
+      if (gnutls->priv->require_close_notify)
 	{
-	  if (gnutls->priv->require_close_notify)
-	    {
-	      g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_EOF,
-				   _("TLS connection closed unexpectedly"));
-	      return status;
-	    }
-	  else
-	    return 0;
+	  g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_EOF,
+			       _("TLS connection closed unexpectedly"));
+	  return status;
 	}
+      else
+	return 0;
     }
 
   return status;
@@ -532,7 +538,7 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
             ret == GNUTLS_E_WARNING_ALERT_RECEIVED) &&	\
            !gnutls->priv->error);			\
   ret = end_gnutls_io (gnutls, ret, error);		\
-  if (ret < 0 && error && !*error)			\
+  if (ret < 0 && ret != GNUTLS_E_REHANDSHAKE && error && !*error) \
     {							\
       g_set_error (error, G_TLS_ERROR, G_TLS_ERROR_MISC,\
                    errmsg, gnutls_strerror (ret));	\
@@ -752,8 +758,10 @@ g_tls_connection_gnutls_pull_func (gnutls_transport_ptr_t  transport_data,
 
   if (ret < 0)
     set_gnutls_error (gnutls, G_IO_IN);
+#ifndef GNUTLS_E_PREMATURE_TERMINATION
   else if (ret == 0)
     gnutls->priv->eof = TRUE;
+#endif
 
   return ret;
 }
