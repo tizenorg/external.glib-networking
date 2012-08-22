@@ -1,17 +1,8 @@
 include $(top_srcdir)/Makefile.decl
 
-NULL =
-
-INCLUDES = \
-	-DG_LOG_DOMAIN=\"GLib-Net\"	\
-	$(GLIB_CFLAGS)			\
-	$(LIBPROXY_CFLAGS)		\
-	-DG_DISABLE_DEPRECATED
-
-module_flags = -export_dynamic -avoid-version -module -no-undefined -export-symbols-regex '^g_io_module_(load|unload|query)'
+INCLUDES += $(LIBPROXY_CFLAGS)
 
 giomodule_LTLIBRARIES = libgiolibproxy.la
-giomoduledir = $(GIO_MODULE_DIR)
 
 libgiolibproxy_la_SOURCES = 		\
 	glibproxyresolver.c		\
@@ -21,10 +12,10 @@ libgiolibproxy_la_SOURCES = 		\
 
 libgiolibproxy_la_CFLAGS = -DGLIBPROXY_MODULE
 libgiolibproxy_la_LDFLAGS = $(module_flags)
-libgiolibproxy_la_LIBADD = \
-		$(GLIB_LIBS) \
-		$(LIBPROXY_LIBS) \
-		$(NULL)
+libgiolibproxy_la_LIBADD =		\
+	$(GLIB_LIBS)			\
+	$(LIBPROXY_LIBS)		\
+	$(NULL)
 
 libexec_PROGRAMS = glib-pacrunner
 
@@ -44,7 +35,7 @@ servicedir = $(datadir)/dbus-1/services
 service_in_files = org.gtk.GLib.PACRunner.service.in
 service_DATA = $(service_in_files:.service.in=.service)
 
-EXTRA_DIST = $(service_in_files)
+EXTRA_DIST += $(service_in_files)
 CLEANFILES = $(service_DATA)
 
 org.gtk.GLib.PACRunner.service: org.gtk.GLib.PACRunner.service.in Makefile

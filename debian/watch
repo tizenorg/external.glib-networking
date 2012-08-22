@@ -1,3 +1,0 @@
-version=3
-http://ftp.gnome.org/pub/GNOME/sources/glib-networking/([\d\.]+[02468])/ \
-	glib-networking-(.*)\.tar\.bz2

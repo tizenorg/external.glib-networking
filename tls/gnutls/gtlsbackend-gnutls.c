@@ -1,6 +1,6 @@
 /* GIO - GLib Input, Output and Streaming Library
  *
- * Copyright © 2010 Red Hat, Inc
+ * Copyright 2010 Red Hat, Inc
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -13,26 +13,29 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General
- * Public License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place, Suite 330,
- * Boston, MA 02111-1307, USA.
+ * Public License along with this library; if not, see
+ * <http://www.gnu.org/licenses/>.
  */
 
 #include "config.h"
 #include "glib.h"
 
 #include <errno.h>
+#include <string.h>
 
 #include <gnutls/gnutls.h>
-#include <gcrypt.h>
-#ifndef G_OS_WIN32
-#include <pthread.h>
-#endif
 
 #include "gtlsbackend-gnutls.h"
 #include "gtlscertificate-gnutls.h"
 #include "gtlsclientconnection-gnutls.h"
+#include "gtlsfiledatabase-gnutls.h"
 #include "gtlsserverconnection-gnutls.h"
+
+struct _GTlsBackendGnutlsPrivate
+{
+  GMutex mutex;
+  GTlsDatabase *default_database;
+};
 
 static void g_tls_backend_gnutls_interface_init (GTlsBackendInterface *iface);
 
@@ -40,67 +43,23 @@ G_DEFINE_DYNAMIC_TYPE_EXTENDED (GTlsBackendGnutls, g_tls_backend_gnutls, G_TYPE_
 				G_IMPLEMENT_INTERFACE_DYNAMIC (G_TYPE_TLS_BACKEND,
 							       g_tls_backend_gnutls_interface_init);)
 
-#if defined(GCRY_THREAD_OPTION_PTHREAD_IMPL) && !defined(G_OS_WIN32)
-GCRY_THREAD_OPTION_PTHREAD_IMPL;
-#endif
-
-#ifdef G_OS_WIN32
-
-static int
-gtls_gcry_win32_mutex_init (void **priv)
+#ifdef GTLS_GNUTLS_DEBUG
+static void
+gtls_log_func (int level, const char *msg)
 {
-	int err = 0;
-	CRITICAL_SECTION *lock = (CRITICAL_SECTION*)malloc (sizeof (CRITICAL_SECTION));
-
-	if (!lock)
-		err = ENOMEM;
-	if (!err) {
-		InitializeCriticalSection (lock);
-		*priv = lock;
-	}
-	return err;
+  g_print ("GTLS: %s", msg);
 }
-
-static int
-gtls_gcry_win32_mutex_destroy (void **lock)
-{
-	DeleteCriticalSection ((CRITICAL_SECTION*)*lock);
-	free (*lock);
-	return 0;
-}
-
-static int
-gtls_gcry_win32_mutex_lock (void **lock)
-{
-	EnterCriticalSection ((CRITICAL_SECTION*)*lock);
-	return 0;
-}
-
-static int
-gtls_gcry_win32_mutex_unlock (void **lock)
-{
-	LeaveCriticalSection ((CRITICAL_SECTION*)*lock);
-	return 0;
-}
-
-
-static struct gcry_thread_cbs gtls_gcry_threads_win32 = {		 \
-	(GCRY_THREAD_OPTION_USER | (GCRY_THREAD_OPTION_VERSION << 8)),	 \
-	NULL, gtls_gcry_win32_mutex_init, gtls_gcry_win32_mutex_destroy, \
-	gtls_gcry_win32_mutex_lock, gtls_gcry_win32_mutex_unlock,	 \
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
-
 #endif
 
 static gpointer
 gtls_gnutls_init (gpointer data)
 {
-#if defined(GCRY_THREAD_OPTION_PTHREAD_IMPL) && !defined(G_OS_WIN32)
-  gcry_control (GCRYCTL_SET_THREAD_CBS, &gcry_threads_pthread);
-#elif defined(G_OS_WIN32)
-  gcry_control (GCRYCTL_SET_THREAD_CBS, &gtls_gcry_threads_win32);
-#endif
   gnutls_global_init ();
+
+#ifdef GTLS_GNUTLS_DEBUG
+  gnutls_global_set_log_function (gtls_log_func);
+  gnutls_global_set_log_level (9);
+#endif
 
   /* Leak the module to keep it from being unloaded. */
   g_type_plugin_use (g_type_get_plugin (G_TYPE_TLS_BACKEND_GNUTLS));
@@ -113,23 +72,88 @@ static void
 g_tls_backend_gnutls_init (GTlsBackendGnutls *backend)
 {
   /* Once we call gtls_gnutls_init(), we can't allow the module to be
-   * unloaded, since that would break the pointers to the mutex
-   * functions we set for gcrypt. So we initialize it from here rather
-   * than at class init time so that it doesn't happen unless the app
-   * is actually using TLS (as opposed to just calling
-   * g_io_modules_scan_all_in_directory()).
+   * unloaded (since if gnutls gets unloaded but gcrypt doesn't, then
+   * gcrypt will have dangling pointers to gnutls's mutex functions).
+   * So we initialize it from here rather than at class init time so
+   * that it doesn't happen unless the app is actually using TLS (as
+   * opposed to just calling g_io_modules_scan_all_in_directory()).
    */
   g_once (&gnutls_inited, gtls_gnutls_init, NULL);
+
+  backend->priv = G_TYPE_INSTANCE_GET_PRIVATE (backend, G_TYPE_TLS_BACKEND_GNUTLS, GTlsBackendGnutlsPrivate);
+  g_mutex_init (&backend->priv->mutex);
+}
+
+static void
+g_tls_backend_gnutls_finalize (GObject *object)
+{
+  GTlsBackendGnutls *backend = G_TLS_BACKEND_GNUTLS (object);
+
+  if (backend->priv->default_database)
+    g_object_unref (backend->priv->default_database);
+  g_mutex_clear (&backend->priv->mutex);
+
+  G_OBJECT_CLASS (g_tls_backend_gnutls_parent_class)->finalize (object);
+}
+
+static GTlsDatabase*
+g_tls_backend_gnutls_real_create_database (GTlsBackendGnutls  *self,
+                                           GError            **error)
+{
+  const gchar *anchor_file = NULL;
+#ifdef GTLS_SYSTEM_CA_FILE
+  anchor_file = GTLS_SYSTEM_CA_FILE;
+#endif
+  return g_tls_file_database_new (anchor_file, error);
 }
 
 static void
 g_tls_backend_gnutls_class_init (GTlsBackendGnutlsClass *backend_class)
 {
+  GObjectClass *gobject_class = G_OBJECT_CLASS (backend_class);
+  gobject_class->finalize = g_tls_backend_gnutls_finalize;
+  backend_class->create_database = g_tls_backend_gnutls_real_create_database;
+  g_type_class_add_private (backend_class, sizeof (GTlsBackendGnutlsPrivate));
 }
 
 static void
 g_tls_backend_gnutls_class_finalize (GTlsBackendGnutlsClass *backend_class)
 {
+}
+
+static GTlsDatabase*
+g_tls_backend_gnutls_get_default_database (GTlsBackend *backend)
+{
+  GTlsBackendGnutls *self = G_TLS_BACKEND_GNUTLS (backend);
+  GTlsDatabase *result;
+  GError *error = NULL;
+
+  g_mutex_lock (&self->priv->mutex);
+
+  if (self->priv->default_database)
+    {
+      result = g_object_ref (self->priv->default_database);
+    }
+  else
+    {
+      g_assert (G_TLS_BACKEND_GNUTLS_GET_CLASS (self)->create_database);
+      result = G_TLS_BACKEND_GNUTLS_GET_CLASS (self)->create_database (self, &error);
+      if (error)
+        {
+          g_warning ("couldn't load TLS file database: %s",
+                     error->message);
+          g_clear_error (&error);
+        }
+      else
+        {
+          g_assert (result);
+          self->priv->default_database = g_object_ref (result);
+        }
+    }
+
+  g_mutex_unlock (&self->priv->mutex);
+
+  return result;
 }
 
 static void
@@ -138,77 +162,8 @@ g_tls_backend_gnutls_interface_init (GTlsBackendInterface *iface)
   iface->get_certificate_type       = g_tls_certificate_gnutls_get_type;
   iface->get_client_connection_type = g_tls_client_connection_gnutls_get_type;
   iface->get_server_connection_type = g_tls_server_connection_gnutls_get_type;
-}
-
-#ifdef GTLS_SYSTEM_CA_FILE
-/* Parsing the system CA list takes a noticeable amount of time.
- * So we only do it once, and only when we actually need to see it.
- */
-static const GList *
-get_ca_lists (gnutls_x509_crt_t **cas,
-	      int                *num_cas)
-{
-  static gnutls_x509_crt_t *ca_list_gnutls;
-  static int ca_list_length;
-  static GList *ca_list;
-
-  if (g_once_init_enter ((volatile gsize *)&ca_list_gnutls))
-    {
-      GError *error = NULL;
-      gnutls_x509_crt_t *x509_crts;
-      GList *c;
-      int i;
-
-      ca_list = g_tls_certificate_list_new_from_file (GTLS_SYSTEM_CA_FILE, &error);
-      if (error)
-	{
-	  g_warning ("Failed to read system CA file %s: %s.",
-		     GTLS_SYSTEM_CA_FILE, error->message);
-	  g_error_free (error);
-	  /* Note that this is not a security problem, since if
-	   * G_TLS_VALIDATE_CA is set, then this just means validation
-	   * will always fail, and if it isn't set, then it doesn't
-	   * matter that we couldn't read the CAs.
-	   */
-	}
-
-      ca_list_length = g_list_length (ca_list);
-      x509_crts = g_new (gnutls_x509_crt_t, ca_list_length);
-      for (c = ca_list, i = 0; c; c = c->next, i++)
-	x509_crts[i] = g_tls_certificate_gnutls_get_cert (c->data);
-
-      g_once_init_leave ((volatile gsize *)&ca_list_gnutls, GPOINTER_TO_SIZE (x509_crts));
-    }
-
-  if (cas)
-    *cas = ca_list_gnutls;
-  if (num_cas)
-    *num_cas = ca_list_length;
-  
-  return ca_list;
-}
-#endif
-
-const GList *
-g_tls_backend_gnutls_get_system_ca_list_gtls (void)
-{
-#ifdef GTLS_SYSTEM_CA_FILE
-  return get_ca_lists (NULL, NULL);
-#else
-  return NULL;
-#endif
-}
-
-void
-g_tls_backend_gnutls_get_system_ca_list_gnutls (gnutls_x509_crt_t **cas,
-						int                *num_cas)
-{
-#ifdef GTLS_SYSTEM_CA_FILE
-  get_ca_lists (cas, num_cas);
-#else
-  *cas = NULL;
-  *num_cas = 0;
-#endif
+  iface->get_file_database_type =     g_tls_file_database_gnutls_get_type;
+  iface->get_default_database =       g_tls_backend_gnutls_get_default_database;
 }
 
 /* Session cache support; all the details are sort of arbitrary. Note
@@ -218,26 +173,26 @@ g_tls_backend_gnutls_get_system_ca_list_gnutls (gnutls_x509_crt_t **cas,
  */
 
 G_LOCK_DEFINE_STATIC (session_cache_lock);
-GHashTable *session_cache;
+GHashTable *client_session_cache, *server_session_cache;
 
 #define SESSION_CACHE_MAX_SIZE 50
 #define SESSION_CACHE_MAX_AGE (60 * 60) /* one hour */
 
 typedef struct {
-  gchar      *session_id;
-  GByteArray *session_data;
-  time_t      last_used;
+  GBytes *session_id;
+  GBytes *session_data;
+  time_t  last_used;
 } GTlsBackendGnutlsCacheData;
 
 static void
-session_cache_cleanup (void)
+session_cache_cleanup (GHashTable *cache)
 {
   GHashTableIter iter;
   gpointer key, value;
   GTlsBackendGnutlsCacheData *cache_data;
   time_t expired = time (NULL) - SESSION_CACHE_MAX_AGE;
 
-  g_hash_table_iter_init (&iter, session_cache);
+  g_hash_table_iter_init (&iter, cache);
   while (g_hash_table_iter_next (&iter, &key, &value))
     {
       cache_data = value;
@@ -251,81 +206,98 @@ cache_data_free (gpointer data)
 {
   GTlsBackendGnutlsCacheData *cache_data = data;
 
-  g_free (cache_data->session_id);
-  g_byte_array_unref (cache_data->session_data);
+  g_bytes_unref (cache_data->session_id);
+  g_bytes_unref (cache_data->session_data);
   g_slice_free (GTlsBackendGnutlsCacheData, cache_data);
 }
 
+static GHashTable *
+get_session_cache (gnutls_connection_end_t type,
+		   gboolean                create)
+{
+  GHashTable **cache_p;
+
+  cache_p = (type == GNUTLS_CLIENT) ? &client_session_cache : &server_session_cache;
+  if (!*cache_p && create)
+    {
+      *cache_p = g_hash_table_new_full (g_bytes_hash, g_bytes_equal,
+					NULL, cache_data_free);
+    }
+  return *cache_p;
+}
+
 void
-g_tls_backend_gnutls_cache_session_data (const gchar *session_id,
-					 guchar      *session_data,
-					 gsize        session_data_length)
+g_tls_backend_gnutls_store_session (gnutls_connection_end_t  type,
+				    GBytes                  *session_id,
+				    GBytes                  *session_data)
 {
   GTlsBackendGnutlsCacheData *cache_data;
+  GHashTable *cache;
 
   G_LOCK (session_cache_lock);
 
-  if (!session_cache)
-    session_cache = g_hash_table_new_full (g_str_hash, g_str_equal,
-					   NULL, cache_data_free);
-
-  cache_data = g_hash_table_lookup (session_cache, session_id);
+  cache = get_session_cache (type, TRUE);
+  cache_data = g_hash_table_lookup (cache, session_id);
   if (cache_data)
     {
-      if (cache_data->session_data->len == session_data_length &&
-	  memcmp (cache_data->session_data->data,
-		  session_data, session_data_length) == 0)
+      if (!g_bytes_equal (cache_data->session_data, session_data))
 	{
-	  cache_data->last_used = time (NULL);
-	  G_UNLOCK (session_cache_lock);
-	  return;
+	  g_bytes_unref (cache_data->session_data);
+	  cache_data->session_data = g_bytes_ref (session_data);
 	}
-
-      g_byte_array_set_size (cache_data->session_data, 0);
     }
   else
     {
-      if (g_hash_table_size (session_cache) >= SESSION_CACHE_MAX_SIZE)
-	session_cache_cleanup ();
+      if (g_hash_table_size (cache) >= SESSION_CACHE_MAX_SIZE)
+	session_cache_cleanup (cache);
 
       cache_data = g_slice_new (GTlsBackendGnutlsCacheData);
-      cache_data->session_id = g_strdup (session_id);
-      cache_data->session_data = g_byte_array_sized_new (session_data_length);
+      cache_data->session_id = g_bytes_ref (session_id);
+      cache_data->session_data = g_bytes_ref (session_data);
 
-      g_hash_table_insert (session_cache, cache_data->session_id, cache_data);
+      g_hash_table_insert (cache, cache_data->session_id, cache_data);
     }
-
-  g_byte_array_append (cache_data->session_data,
-		       session_data, session_data_length);
   cache_data->last_used = time (NULL);
+
   G_UNLOCK (session_cache_lock);
 }
 
 void
-g_tls_backend_gnutls_uncache_session_data (const gchar *session_id)
+g_tls_backend_gnutls_remove_session (gnutls_connection_end_t  type,
+				     GBytes                  *session_id)
 {
+  GHashTable *cache;
+
   G_LOCK (session_cache_lock);
-  if (session_cache)
-    g_hash_table_remove (session_cache, session_id);
+
+  cache = get_session_cache (type, FALSE);
+  if (cache)
+    g_hash_table_remove (cache, session_id);
+
   G_UNLOCK (session_cache_lock);
 }
 
-GByteArray *
-g_tls_backend_gnutls_lookup_session_data (const gchar *session_id)
+GBytes *
+g_tls_backend_gnutls_lookup_session (gnutls_connection_end_t  type,
+				     GBytes                  *session_id)
 {
   GTlsBackendGnutlsCacheData *cache_data;
-  GByteArray *session_data = NULL;
+  GBytes *session_data = NULL;
+  GHashTable *cache;
 
   G_LOCK (session_cache_lock);
-  if (session_cache)
+
+  cache = get_session_cache (type, FALSE);
+  if (cache)
     {
-      cache_data = g_hash_table_lookup (session_cache, session_id);
+      cache_data = g_hash_table_lookup (cache, session_id);
       if (cache_data)
 	{
 	  cache_data->last_used = time (NULL);
-	  session_data = g_byte_array_ref (cache_data->session_data);
+	  session_data = g_bytes_ref (cache_data->session_data);
 	}
     }
+
   G_UNLOCK (session_cache_lock);
 
   return session_data;

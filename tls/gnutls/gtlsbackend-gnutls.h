@@ -1,6 +1,6 @@
-/* GIO - GLib Backend, Output and Gnutlsing Library
+/* GIO - GLib Input, Output and Streaming Library
  *
- * Copyright © 2010 Red Hat, Inc.
+ * Copyright 2010 Red Hat, Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -25,31 +25,34 @@ G_BEGIN_DECLS
 #define G_IS_TLS_BACKEND_GNUTLS_CLASS(class) (G_TYPE_CHECK_CLASS_TYPE ((class), G_TYPE_TLS_BACKEND_GNUTLS))
 #define G_TLS_BACKEND_GNUTLS_GET_CLASS(inst) (G_TYPE_INSTANCE_GET_CLASS ((inst), G_TYPE_TLS_BACKEND_GNUTLS, GTlsBackendGnutlsClass))
 
-typedef struct _GTlsBackendGnutlsClass GTlsBackendGnutlsClass;
-typedef struct _GTlsBackendGnutls      GTlsBackendGnutls;
+typedef struct _GTlsBackendGnutls        GTlsBackendGnutls;
+typedef struct _GTlsBackendGnutlsClass   GTlsBackendGnutlsClass;
+typedef struct _GTlsBackendGnutlsPrivate GTlsBackendGnutlsPrivate;
 
 struct _GTlsBackendGnutlsClass
 {
   GObjectClass parent_class;
+
+  GTlsDatabase*   (*create_database)      (GTlsBackendGnutls          *self,
+                                           GError                    **error);
 };
 
 struct _GTlsBackendGnutls
 {
   GObject parent_instance;
+  GTlsBackendGnutlsPrivate *priv;
 };
 
 GType g_tls_backend_gnutls_get_type (void) G_GNUC_CONST;
 void  g_tls_backend_gnutls_register (GIOModule *module);
 
-const GList *g_tls_backend_gnutls_get_system_ca_list_gtls   (void) G_GNUC_CONST;
-void         g_tls_backend_gnutls_get_system_ca_list_gnutls (gnutls_x509_crt_t **cas,
-							     int                *num_cas);
-
-void         g_tls_backend_gnutls_cache_session_data        (const gchar *session_id,
-							     guchar      *session_data,
-							     gsize        session_data_length);
-void         g_tls_backend_gnutls_uncache_session_data      (const gchar *session_id);
-GByteArray  *g_tls_backend_gnutls_lookup_session_data       (const gchar *session_id);
+void    g_tls_backend_gnutls_store_session  (gnutls_connection_end_t  type,
+					     GBytes                  *session_id,
+					     GBytes                  *session_data);
+void    g_tls_backend_gnutls_remove_session (gnutls_connection_end_t  type,
+					     GBytes                  *session_id);
+GBytes *g_tls_backend_gnutls_lookup_session (gnutls_connection_end_t  type,
+					     GBytes                  *session_id);
 
 G_END_DECLS
 

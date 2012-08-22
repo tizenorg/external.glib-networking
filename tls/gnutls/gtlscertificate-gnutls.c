@@ -1,6 +1,6 @@
 /* GIO - GLib Input, Output and Streaming Library
  *
- * Copyright © 2009 Red Hat, Inc
+ * Copyright 2009 Red Hat, Inc
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -13,9 +13,8 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General
- * Public License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place, Suite 330,
- * Boston, MA 02111-1307, USA.
+ * Public License along with this library; if not, see
+ * <http://www.gnu.org/licenses/>.
  */
 
 #include "config.h"
@@ -63,7 +62,8 @@ g_tls_certificate_gnutls_finalize (GObject *object)
   GTlsCertificateGnutls *gnutls = G_TLS_CERTIFICATE_GNUTLS (object);
 
   gnutls_x509_crt_deinit (gnutls->priv->cert);
-  gnutls_x509_privkey_deinit (gnutls->priv->key);
+  if (gnutls->priv->key)
+    gnutls_x509_privkey_deinit (gnutls->priv->key);
 
   if (gnutls->priv->issuer)
     g_object_unref (gnutls->priv->issuer);
@@ -203,8 +203,19 @@ g_tls_certificate_gnutls_set_property (GObject      *object,
       g_return_if_fail (gnutls->priv->have_key == FALSE);
       data.data = bytes->data;
       data.size = bytes->len;
+      if (!gnutls->priv->key)
+        gnutls_x509_privkey_init (&gnutls->priv->key);
       status = gnutls_x509_privkey_import (gnutls->priv->key, &data,
 					   GNUTLS_X509_FMT_DER);
+      if (status != 0)
+	{
+	  int pkcs8_status =
+	    gnutls_x509_privkey_import_pkcs8 (gnutls->priv->key, &data,
+					      GNUTLS_X509_FMT_DER, NULL,
+					      GNUTLS_PKCS_PLAIN);
+	  if (pkcs8_status == 0)
+	    status = 0;
+	}
       if (status == 0)
 	gnutls->priv->have_key = TRUE;
       else if (!gnutls->priv->construct_error)
@@ -223,8 +234,19 @@ g_tls_certificate_gnutls_set_property (GObject      *object,
       g_return_if_fail (gnutls->priv->have_key == FALSE);
       data.data = (void *)string;
       data.size = strlen (string);
+      if (!gnutls->priv->key)
+        gnutls_x509_privkey_init (&gnutls->priv->key);
       status = gnutls_x509_privkey_import (gnutls->priv->key, &data,
 					   GNUTLS_X509_FMT_PEM);
+      if (status != 0)
+	{
+	  int pkcs8_status =
+	    gnutls_x509_privkey_import_pkcs8 (gnutls->priv->key, &data,
+					      GNUTLS_X509_FMT_PEM, NULL,
+					      GNUTLS_PKCS_PLAIN);
+	  if (pkcs8_status == 0)
+	    status = 0;
+	}
       if (status == 0)
 	gnutls->priv->have_key = TRUE;
       else if (!gnutls->priv->construct_error)
@@ -253,7 +275,6 @@ g_tls_certificate_gnutls_init (GTlsCertificateGnutls *gnutls)
 					      GTlsCertificateGnutlsPrivate);
 
   gnutls_x509_crt_init (&gnutls->priv->cert);
-  gnutls_x509_privkey_init (&gnutls->priv->key);
 }
 
 static gboolean
@@ -345,6 +366,40 @@ g_tls_certificate_gnutls_verify (GTlsCertificate     *cert,
 }
 
 static void
+g_tls_certificate_gnutls_real_copy (GTlsCertificateGnutls    *gnutls,
+                                    const gchar              *interaction_id,
+                                    gnutls_retr2_st          *st)
+{
+  gnutls_x509_crt_t cert;
+  gnutls_datum data;
+  size_t size = 0;
+
+  gnutls_x509_crt_export (gnutls->priv->cert, GNUTLS_X509_FMT_DER,
+                          NULL, &size);
+  data.data = g_malloc (size);
+  data.size = size;
+  gnutls_x509_crt_export (gnutls->priv->cert, GNUTLS_X509_FMT_DER,
+                          data.data, &size);
+
+  gnutls_x509_crt_init (&cert);
+  gnutls_x509_crt_import (cert, &data, GNUTLS_X509_FMT_DER);
+  g_free (data.data);
+
+  st->ncerts = 1;
+  st->cert.x509 = gnutls_malloc (sizeof (gnutls_x509_crt_t));
+  st->cert.x509[0] = cert;
+
+  if (gnutls->priv->key != NULL)
+    {
+      gnutls_x509_privkey_init (&st->key.x509);
+      gnutls_x509_privkey_cpy (st->key.x509, gnutls->priv->key);
+      st->key_type = GNUTLS_PRIVKEY_X509;
+    }
+
+  st->deinit_all = TRUE;
+}
+
+static void
 g_tls_certificate_gnutls_class_init (GTlsCertificateGnutlsClass *klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
@@ -357,6 +412,8 @@ g_tls_certificate_gnutls_class_init (GTlsCertificateGnutlsClass *klass)
   gobject_class->finalize     = g_tls_certificate_gnutls_finalize;
 
   certificate_class->verify = g_tls_certificate_gnutls_verify;
+
+  klass->copy = g_tls_certificate_gnutls_real_copy;
 
   g_object_class_override_property (gobject_class, PROP_CERTIFICATE, "certificate");
   g_object_class_override_property (gobject_class, PROP_CERTIFICATE_PEM, "certificate-pem");
@@ -380,11 +437,21 @@ g_tls_certificate_gnutls_new (const gnutls_datum *datum,
   gnutls = g_object_new (G_TYPE_TLS_CERTIFICATE_GNUTLS,
 			 "issuer", issuer,
 			 NULL);
-  if (gnutls_x509_crt_import (gnutls->priv->cert, datum,
-			      GNUTLS_X509_FMT_DER) == 0)
-    gnutls->priv->have_cert = TRUE;
+  g_tls_certificate_gnutls_set_data (gnutls, datum);
 
   return G_TLS_CERTIFICATE (gnutls);
+}
+
+void
+g_tls_certificate_gnutls_set_data (GTlsCertificateGnutls *gnutls,
+                                   const gnutls_datum *datum)
+{
+  g_return_if_fail (G_IS_TLS_CERTIFICATE_GNUTLS (gnutls));
+  g_return_if_fail (!gnutls->priv->have_cert);
+
+  if (gnutls_x509_crt_import (gnutls->priv->cert, datum,
+                              GNUTLS_X509_FMT_DER) == 0)
+    gnutls->priv->have_cert = TRUE;
 }
 
 const gnutls_x509_crt_t
@@ -393,42 +460,21 @@ g_tls_certificate_gnutls_get_cert (GTlsCertificateGnutls *gnutls)
   return gnutls->priv->cert;
 }
 
-const gnutls_x509_privkey_t
-g_tls_certificate_gnutls_get_key (GTlsCertificateGnutls *gnutls)
+gboolean
+g_tls_certificate_gnutls_has_key (GTlsCertificateGnutls *gnutls)
 {
-  return gnutls->priv->key;
+  return gnutls->priv->have_key;
 }
 
-gnutls_x509_crt_t
-g_tls_certificate_gnutls_copy_cert (GTlsCertificateGnutls *gnutls)
+void
+g_tls_certificate_gnutls_copy  (GTlsCertificateGnutls *gnutls,
+                                const gchar           *interaction_id,
+                                gnutls_retr2_st       *st)
 {
-  gnutls_x509_crt_t cert;
-  gnutls_datum data;
-  size_t size;
-
-  size = 0;
-  gnutls_x509_crt_export (gnutls->priv->cert, GNUTLS_X509_FMT_DER,
-			  NULL, &size);
-  data.data = g_malloc (size);
-  data.size = size;
-  gnutls_x509_crt_export (gnutls->priv->cert, GNUTLS_X509_FMT_DER,
-			  data.data, &size);
-
-  gnutls_x509_crt_init (&cert);
-  gnutls_x509_crt_import (cert, &data, GNUTLS_X509_FMT_DER);
-  g_free (data.data);
-
-  return cert;
-}
-
-gnutls_x509_privkey_t
-g_tls_certificate_gnutls_copy_key  (GTlsCertificateGnutls *gnutls)
-{
-  gnutls_x509_privkey_t key;
-
-  gnutls_x509_privkey_init (&key);
-  gnutls_x509_privkey_cpy (key, gnutls->priv->key);
-  return key;
+  g_return_if_fail (G_IS_TLS_CERTIFICATE_GNUTLS (gnutls));
+  g_return_if_fail (st != NULL);
+  g_return_if_fail (G_TLS_CERTIFICATE_GNUTLS_GET_CLASS (gnutls)->copy);
+  G_TLS_CERTIFICATE_GNUTLS_GET_CLASS (gnutls)->copy (gnutls, interaction_id, st);
 }
 
 static const struct {
@@ -497,4 +543,19 @@ g_tls_certificate_gnutls_verify_identity (GTlsCertificateGnutls *gnutls,
    */
 
   return G_TLS_CERTIFICATE_BAD_IDENTITY;
+}
+
+void
+g_tls_certificate_gnutls_set_issuer (GTlsCertificateGnutls *gnutls,
+                                     GTlsCertificateGnutls *issuer)
+{
+  g_return_if_fail (G_IS_TLS_CERTIFICATE_GNUTLS (gnutls));
+  g_return_if_fail (!issuer || G_IS_TLS_CERTIFICATE_GNUTLS (issuer));
+
+  if (issuer)
+    g_object_ref (issuer);
+  if (gnutls->priv->issuer)
+    g_object_unref (gnutls->priv->issuer);
+  gnutls->priv->issuer = issuer;
+  g_object_notify (G_OBJECT (gnutls), "issuer");
 }

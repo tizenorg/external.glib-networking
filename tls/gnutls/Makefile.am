@@ -1,25 +1,31 @@
 include $(top_srcdir)/Makefile.decl
 
-NULL =
-
-module_flags = -export_dynamic -avoid-version -module -no-undefined -export-symbols-regex '^g_io_module_(load|unload|query)'
-
 giomodule_LTLIBRARIES = libgiognutls.la
-giomoduledir = $(GIO_MODULE_DIR)
 
-gnutls-marshal.h: gnutls-marshal.list
-	$(AM_V_GEN) $(GLIB_GENMARSHAL) --prefix=_gnutls_marshal $(srcdir)/gnutls-marshal.list --header --internal > $@.tmp && \
-	  mv $@.tmp $@
-
-gnutls-marshal.c: gnutls-marshal.h gnutls-marshal.list
-	$(AM_V_GEN) (echo "#include \"gnutls-marshal.h\""; \
-	$(GLIB_GENMARSHAL) --prefix=_gnutls_marshal $(srcdir)/gnutls-marshal.list --body --internal) > $@.tmp && \
-	  mv $@.tmp $@
+if HAVE_PKCS11
+P11_SRCS = \
+	gtlsbackend-gnutls-pkcs11.c	\
+	gtlsbackend-gnutls-pkcs11.h	\
+	gtlscertificate-gnutls-pkcs11.c	\
+	gtlscertificate-gnutls-pkcs11.h	\
+	gtlsdatabase-gnutls-pkcs11.c	\
+	gtlsdatabase-gnutls-pkcs11.h	\
+	$(NULL)
+P11_LIBADD =				\
+	$(top_builddir)/tls/pkcs11/libgiopkcs11.la \
+	$(PKCS11_LIBS)			\
+	$(NULL)
+P11_CFLAGS =				\
+	-I$(top_srcdir)/tls/		\
+	$(PKCS11_CFLAGS)
+else
+P11_SRCS =
+P11_LIBADD =
+P11_CFLAGS =
+endif
 
 libgiognutls_la_SOURCES = 		\
 	gnutls-module.c			\
-	gnutls-marshal.c		\
-	gnutls-marshal.h		\
 	gtlsbackend-gnutls.c		\
 	gtlsbackend-gnutls.h		\
 	gtlscertificate-gnutls.c	\
@@ -28,37 +34,27 @@ libgiognutls_la_SOURCES = 		\
 	gtlsclientconnection-gnutls.h	\
 	gtlsconnection-gnutls.c		\
 	gtlsconnection-gnutls.h		\
+	gtlsdatabase-gnutls.c		\
+	gtlsdatabase-gnutls.h		\
+	gtlsfiledatabase-gnutls.c	\
+	gtlsfiledatabase-gnutls.h	\
 	gtlsinputstream-gnutls.c	\
 	gtlsinputstream-gnutls.h	\
 	gtlsoutputstream-gnutls.c	\
 	gtlsoutputstream-gnutls.h	\
 	gtlsserverconnection-gnutls.c	\
 	gtlsserverconnection-gnutls.h	\
+	$(P11_SRCS) 			\
 	$(NULL)
 
-$(libgiognutls_la_OBJECTS): gnutls-marshal.h
-
-libgiognutls_la_CFLAGS = \
-	-DG_LOG_DOMAIN=\"GLib-Net\"	\
-	$(GLIB_CFLAGS)			\
+INCLUDES +=				\
+	$(P11_CFLAGS)			\
 	$(LIBGNUTLS_CFLAGS)		\
-	$(LIBGCRYPT_CFLAGS)		\
-	-DGIO_MODULE_DIR=\"$(GIO_MODULE_DIR)\"	\
-	-DG_DISABLE_DEPRECATED
+	$(NULL)
 
 libgiognutls_la_LDFLAGS = $(module_flags)
 libgiognutls_la_LIBADD =		\
+	$(P11_LIBADD)			\
 	$(GLIB_LIBS)			\
 	$(GNUTLS_LIBS)			\
-	$(LIBGCRYPT_LIBS)		\
 	$(NULL)
-
-BUILT_SOURCES = 		\
-	gnutls-marshal.h	\
-	gnutls-marshal.c
-
-EXTRA_DIST = 			\
-	gnutls-marshal.list
-
-CLEANFILES = 			\
-	$(BUILT_SOURCES)

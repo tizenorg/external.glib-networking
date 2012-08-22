@@ -1,6 +1,6 @@
-/* GIO - GLib Connection, Output and Gnutlsing Library
+/* GIO - GLib Input, Output and Streaming Library
  *
- * Copyright © 2009 Red Hat, Inc.
+ * Copyright 2009 Red Hat, Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -33,11 +33,14 @@ struct _GTlsConnectionGnutlsClass
 {
   GTlsConnectionClass parent_class;
 
+  void     (*failed)           (GTlsConnectionGnutls  *gnutls);
+
   void     (*begin_handshake)  (GTlsConnectionGnutls  *gnutls);
   gboolean (*verify_peer)      (GTlsConnectionGnutls  *gnutls,
 				GTlsCertificate       *peer_certificate,
 				GTlsCertificateFlags  *errors);
   void     (*finish_handshake) (GTlsConnectionGnutls  *gnutls,
+				gboolean               success,
 				GError               **inout_error);
 };
 
@@ -52,7 +55,7 @@ GType g_tls_connection_gnutls_get_type (void) G_GNUC_CONST;
 gnutls_certificate_credentials g_tls_connection_gnutls_get_credentials (GTlsConnectionGnutls *connection);
 gnutls_session                 g_tls_connection_gnutls_get_session     (GTlsConnectionGnutls *connection);
 void                           g_tls_connection_gnutls_get_certificate (GTlsConnectionGnutls *gnutls,
-									 gnutls_retr_st       *st);
+                                                                        gnutls_retr2_st      *st);
 
 gssize   g_tls_connection_gnutls_read          (GTlsConnectionGnutls  *gnutls,
 						void                  *buffer,

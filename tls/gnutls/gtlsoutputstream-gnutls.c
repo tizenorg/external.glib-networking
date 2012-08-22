@@ -1,6 +1,6 @@
 /* GIO - GLib Input, Output and Streaming Library
  *
- * Copyright © 2010 Red Hat, Inc.
+ * Copyright 2010 Red Hat, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -13,9 +13,8 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General
- * Public License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place, Suite 330,
- * Boston, MA 02111-1307, USA.
+ * Public License along with this library; if not, see
+ * <http://www.gnu.org/licenses/>.
  */
 
 #include "config.h"
@@ -145,6 +144,9 @@ g_tls_output_stream_gnutls_write_async (GOutputStream        *stream,
       g_object_unref (simple);
       return;
     }
+
+  if (error)
+    g_error_free (error);
 
   tls_stream->priv->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
   tls_stream->priv->buffer = buffer;

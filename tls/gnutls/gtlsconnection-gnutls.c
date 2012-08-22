@@ -1,6 +1,6 @@
 /* GIO - GLib Input, Output and Streaming Library
  *
- * Copyright © 2009 Red Hat, Inc
+ * Copyright 2009 Red Hat, Inc
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -13,9 +13,8 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General
- * Public License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place, Suite 330,
- * Boston, MA 02111-1307, USA.
+ * Public License along with this library; if not, see
+ * <http://www.gnu.org/licenses/>.
  */
 
 #include "config.h"
@@ -31,45 +30,13 @@
 #include "gtlsinputstream-gnutls.h"
 #include "gtlsoutputstream-gnutls.h"
 #include "gtlsserverconnection-gnutls.h"
-#include "gnutls-marshal.h"
+
+#ifdef HAVE_PKCS11
+#include <p11-kit/pin.h>
+#include "pkcs11/gpkcs11pin.h"
+#endif
+
 #include <glib/gi18n-lib.h>
-
-static void g_tls_connection_gnutls_get_property (GObject    *object,
-						  guint       prop_id,
-						  GValue     *value,
-						  GParamSpec *pspec);
-static void g_tls_connection_gnutls_set_property (GObject      *object,
-						  guint         prop_id,
-						  const GValue *value,
-						  GParamSpec   *pspec);
-static void g_tls_connection_gnutls_finalize     (GObject      *object);
-
-static gboolean     g_tls_connection_gnutls_handshake        (GTlsConnection       *connection,
-							      GCancellable         *cancellable,
-							      GError              **error);
-static void         g_tls_connection_gnutls_handshake_async  (GTlsConnection       *conn,
-							      int                   io_priority,
-							      GCancellable         *cancellable,
-							      GAsyncReadyCallback   callback,
-							      gpointer              user_data);
-static gboolean     g_tls_connection_gnutls_handshake_finish (GTlsConnection       *conn,
-							      GAsyncResult         *result,
-							      GError              **error);
-
-static GInputStream  *g_tls_connection_gnutls_get_input_stream  (GIOStream *stream);
-static GOutputStream *g_tls_connection_gnutls_get_output_stream (GIOStream *stream);
-
-static gboolean     g_tls_connection_gnutls_close        (GIOStream           *stream,
-							  GCancellable        *cancellable,
-							  GError             **error);
-static void         g_tls_connection_gnutls_close_async  (GIOStream           *stream,
-							  int                  io_priority,
-							  GCancellable        *cancellable,
-							  GAsyncReadyCallback  callback,
-							  gpointer             user_data);
-static gboolean     g_tls_connection_gnutls_close_finish (GIOStream           *stream,
-							  GAsyncResult        *result,
-							  GError             **error);
 
 static ssize_t g_tls_connection_gnutls_push_func (gnutls_transport_ptr_t  transport_data,
 						  const void             *buf,
@@ -82,6 +49,14 @@ static void     g_tls_connection_gnutls_initable_iface_init (GInitableIface  *if
 static gboolean g_tls_connection_gnutls_initable_init       (GInitable       *initable,
 							     GCancellable    *cancellable,
 							     GError         **error);
+
+#ifdef HAVE_PKCS11
+static P11KitPin*    on_pin_prompt_callback  (const char     *pinfile,
+                                              P11KitUri      *pin_uri,
+                                              const char     *pin_description,
+                                              P11KitPinFlags  pin_flags,
+                                              void           *callback_data);
+#endif
 
 static void g_tls_connection_gnutls_init_priorities (void);
 
@@ -99,7 +74,9 @@ enum
   PROP_REQUIRE_CLOSE_NOTIFY,
   PROP_REHANDSHAKE_MODE,
   PROP_USE_SYSTEM_CERTDB,
+  PROP_DATABASE,
   PROP_CERTIFICATE,
+  PROP_INTERACTION,
   PROP_PEER_CERTIFICATE,
   PROP_PEER_CERTIFICATE_ERRORS
 };
@@ -110,7 +87,6 @@ struct _GTlsConnectionGnutlsPrivate
   GPollableInputStream *base_istream;
   GPollableOutputStream *base_ostream;
 
-  GList *ca_list;
   gnutls_certificate_credentials creds;
   gnutls_session session;
 
@@ -118,60 +94,34 @@ struct _GTlsConnectionGnutlsPrivate
   GTlsCertificateFlags peer_certificate_errors;
   gboolean require_close_notify;
   GTlsRehandshakeMode rehandshake_mode;
-  gboolean use_system_certdb;
+  gboolean is_system_certdb;
+  GTlsDatabase *database;
+  gboolean database_is_unset;
   gboolean need_handshake, handshaking, ever_handshaked;
   gboolean closing;
 
   GInputStream *tls_istream;
   GOutputStream *tls_ostream;
 
+  GTlsInteraction *interaction;
+  gchar *interaction_id;
+
   GError *error;
   GCancellable *cancellable;
-  gboolean blocking, eof;
+  gboolean blocking;
+#ifndef GNUTLS_E_PREMATURE_TERMINATION
+  gboolean eof;
+#endif
   GIOCondition internal_direction;
 };
 
-static void
-g_tls_connection_gnutls_class_init (GTlsConnectionGnutlsClass *klass)
-{
-  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
-  GTlsConnectionClass *connection_class = G_TLS_CONNECTION_CLASS (klass);
-  GIOStreamClass *iostream_class = G_IO_STREAM_CLASS (klass);
-
-  g_type_class_add_private (klass, sizeof (GTlsConnectionGnutlsPrivate));
-
-  gobject_class->get_property = g_tls_connection_gnutls_get_property;
-  gobject_class->set_property = g_tls_connection_gnutls_set_property;
-  gobject_class->finalize     = g_tls_connection_gnutls_finalize;
-
-  connection_class->handshake        = g_tls_connection_gnutls_handshake;
-  connection_class->handshake_async  = g_tls_connection_gnutls_handshake_async;
-  connection_class->handshake_finish = g_tls_connection_gnutls_handshake_finish;
-
-  iostream_class->get_input_stream  = g_tls_connection_gnutls_get_input_stream;
-  iostream_class->get_output_stream = g_tls_connection_gnutls_get_output_stream;
-  iostream_class->close_fn          = g_tls_connection_gnutls_close;
-  iostream_class->close_async       = g_tls_connection_gnutls_close_async;
-  iostream_class->close_finish      = g_tls_connection_gnutls_close_finish;
-
-  g_object_class_override_property (gobject_class, PROP_BASE_IO_STREAM, "base-io-stream");
-  g_object_class_override_property (gobject_class, PROP_REQUIRE_CLOSE_NOTIFY, "require-close-notify");
-  g_object_class_override_property (gobject_class, PROP_REHANDSHAKE_MODE, "rehandshake-mode");
-  g_object_class_override_property (gobject_class, PROP_USE_SYSTEM_CERTDB, "use-system-certdb");
-  g_object_class_override_property (gobject_class, PROP_CERTIFICATE, "certificate");
-  g_object_class_override_property (gobject_class, PROP_PEER_CERTIFICATE, "peer-certificate");
-  g_object_class_override_property (gobject_class, PROP_PEER_CERTIFICATE_ERRORS, "peer-certificate-errors");
-}
-
-static void
-g_tls_connection_gnutls_initable_iface_init (GInitableIface *iface)
-{
-  iface->init = g_tls_connection_gnutls_initable_init;
-}
+static gint unique_interaction_id = 0;
 
 static void
 g_tls_connection_gnutls_init (GTlsConnectionGnutls *gnutls)
 {
+  gint unique_id;
+
   gnutls->priv = G_TYPE_INSTANCE_GET_PRIVATE (gnutls, G_TYPE_TLS_CONNECTION_GNUTLS, GTlsConnectionGnutlsPrivate);
 
   gnutls_certificate_allocate_credentials (&gnutls->priv->creds);
@@ -179,6 +129,17 @@ g_tls_connection_gnutls_init (GTlsConnectionGnutls *gnutls)
 				       GNUTLS_VERIFY_ALLOW_X509_V1_CA_CRT);
 
   gnutls->priv->need_handshake = TRUE;
+
+  gnutls->priv->database_is_unset = TRUE;
+  gnutls->priv->is_system_certdb = TRUE;
+
+  unique_id = g_atomic_int_add (&unique_interaction_id, 1);
+  gnutls->priv->interaction_id = g_strdup_printf ("gtls:%d", unique_id);
+
+#ifdef HAVE_PKCS11
+  p11_kit_pin_register_callback (gnutls->priv->interaction_id,
+                                 on_pin_prompt_callback, gnutls, NULL);
+#endif
 }
 
 static gnutls_priority_t priorities[2][2];
@@ -189,16 +150,16 @@ g_tls_connection_gnutls_init_priorities (void)
   /* First field is "ssl3 only", second is "allow unsafe rehandshaking" */
 
   gnutls_priority_init (&priorities[FALSE][FALSE],
-			"NORMAL",
+			"NORMAL:%COMPAT",
 			NULL);
   gnutls_priority_init (&priorities[TRUE][FALSE],
-			"NORMAL:!VERS-TLS1.2:!VERS-TLS1.1:!VERS-TLS1.0",
+			"NORMAL:%COMPAT:!VERS-TLS1.2:!VERS-TLS1.1:!VERS-TLS1.0",
 			NULL);
   gnutls_priority_init (&priorities[FALSE][TRUE],
-			"NORMAL:%UNSAFE_RENEGOTIATION",
+			"NORMAL:%COMPAT:%UNSAFE_RENEGOTIATION",
 			NULL);
   gnutls_priority_init (&priorities[TRUE][TRUE],
-			"NORMAL:!VERS-TLS1.2:!VERS-TLS1.1:!VERS-TLS1.0:%UNSAFE_RENEGOTIATION",
+			"NORMAL:%COMPAT:!VERS-TLS1.2:!VERS-TLS1.1:!VERS-TLS1.0:%UNSAFE_RENEGOTIATION",
 			NULL);
 }
 
@@ -243,6 +204,11 @@ g_tls_connection_gnutls_initable_init (GInitable     *initable,
       return FALSE;
     }
 
+  /* Some servers (especially on embedded devices) use tiny keys that
+   * gnutls will reject by default. We want it to accept them.
+   */
+  gnutls_dh_set_prime_bits (gnutls->priv->session, 256);
+
   gnutls_transport_set_push_function (gnutls->priv->session,
 				      g_tls_connection_gnutls_push_func);
   gnutls_transport_set_pull_function (gnutls->priv->session,
@@ -274,13 +240,23 @@ g_tls_connection_gnutls_finalize (GObject *object)
   if (connection->priv->creds)
     gnutls_certificate_free_credentials (connection->priv->creds);
 
+  if (connection->priv->database)
+    g_object_unref (connection->priv->database);
   if (connection->priv->certificate)
     g_object_unref (connection->priv->certificate);
   if (connection->priv->peer_certificate)
     g_object_unref (connection->priv->peer_certificate);
 
+  g_clear_object (&connection->priv->interaction);
+
   if (connection->priv->error)
     g_error_free (connection->priv->error);
+
+#ifdef HAVE_PKCS11
+  p11_kit_pin_unregister_callback (connection->priv->interaction_id,
+                                   on_pin_prompt_callback, connection);
+#endif
+  g_free (connection->priv->interaction_id);
 
   G_OBJECT_CLASS (g_tls_connection_gnutls_parent_class)->finalize (object);
 }
@@ -292,6 +268,7 @@ g_tls_connection_gnutls_get_property (GObject    *object,
 				      GParamSpec *pspec)
 {
   GTlsConnectionGnutls *gnutls = G_TLS_CONNECTION_GNUTLS (object);
+  GTlsBackend *backend;
 
   switch (prop_id)
     {
@@ -308,11 +285,25 @@ g_tls_connection_gnutls_get_property (GObject    *object,
       break;
 
     case PROP_USE_SYSTEM_CERTDB:
-      g_value_set_boolean (value, gnutls->priv->use_system_certdb);
+      g_value_set_boolean (value, gnutls->priv->is_system_certdb);
+      break;
+
+    case PROP_DATABASE:
+      if (gnutls->priv->database_is_unset)
+        {
+          backend = g_tls_backend_get_default ();
+          gnutls->priv->database =  g_tls_backend_get_default_database (backend);
+          gnutls->priv->database_is_unset = FALSE;
+        }
+      g_value_set_object (value, gnutls->priv->database);
       break;
 
     case PROP_CERTIFICATE:
       g_value_set_object (value, gnutls->priv->certificate);
+      break;
+
+    case PROP_INTERACTION:
+      g_value_set_object (value, gnutls->priv->interaction);
       break;
 
     case PROP_PEER_CERTIFICATE:
@@ -337,6 +328,8 @@ g_tls_connection_gnutls_set_property (GObject      *object,
   GTlsConnectionGnutls *gnutls = G_TLS_CONNECTION_GNUTLS (object);
   GInputStream *istream;
   GOutputStream *ostream;
+  gboolean system_certdb;
+  GTlsBackend *backend;
 
   switch (prop_id)
     {
@@ -371,23 +364,35 @@ g_tls_connection_gnutls_set_property (GObject      *object,
       break;
 
     case PROP_USE_SYSTEM_CERTDB:
-      gnutls->priv->use_system_certdb = g_value_get_boolean (value);
+      system_certdb = g_value_get_boolean (value);
+      if (system_certdb != gnutls->priv->is_system_certdb)
+        {
+          g_clear_object (&gnutls->priv->database);
+          if (system_certdb)
+            {
+              backend = g_tls_backend_get_default ();
+              gnutls->priv->database = g_tls_backend_get_default_database (backend);
+            }
+          gnutls->priv->is_system_certdb = system_certdb;
+        }
+      break;
 
-      gnutls_certificate_free_cas (gnutls->priv->creds);
-      if (gnutls->priv->use_system_certdb)
-	{
-	  gnutls_x509_crt_t *cas;
-	  int num_cas;
-
-	  g_tls_backend_gnutls_get_system_ca_list_gnutls (&cas, &num_cas);
-	  gnutls_certificate_set_x509_trust (gnutls->priv->creds, cas, num_cas);
-	}
+    case PROP_DATABASE:
+      g_clear_object (&gnutls->priv->database);
+      gnutls->priv->database = g_value_dup_object (value);
+      gnutls->priv->is_system_certdb = FALSE;
+      gnutls->priv->database_is_unset = FALSE;
       break;
 
     case PROP_CERTIFICATE:
       if (gnutls->priv->certificate)
 	g_object_unref (gnutls->priv->certificate);
       gnutls->priv->certificate = g_value_dup_object (value);
+      break;
+
+    case PROP_INTERACTION:
+      g_clear_object (&gnutls->priv->interaction);
+      gnutls->priv->interaction = g_value_dup_object (value);
       break;
 
     default:
@@ -421,25 +426,18 @@ g_tls_connection_gnutls_get_session (GTlsConnectionGnutls *gnutls)
 
 void
 g_tls_connection_gnutls_get_certificate (GTlsConnectionGnutls *gnutls,
-					 gnutls_retr_st       *st)
+                                         gnutls_retr2_st      *st)
 {
   GTlsCertificate *cert;
 
   cert = g_tls_connection_get_certificate (G_TLS_CONNECTION (gnutls));
 
-  st->type = GNUTLS_CRT_X509;
-  if (cert)
-    {
-      GTlsCertificateGnutls *gnutlscert = G_TLS_CERTIFICATE_GNUTLS (cert);
+  st->cert_type = GNUTLS_CRT_X509;
+  st->ncerts = 0;
 
-      st->ncerts = 1;
-      st->cert.x509 = gnutls_malloc (sizeof (gnutls_x509_crt_t));
-      st->cert.x509[0] = g_tls_certificate_gnutls_copy_cert (gnutlscert);
-      st->key.x509 = g_tls_certificate_gnutls_copy_key (gnutlscert);
-      st->deinit_all = TRUE;
-    }
-  else
-    st->ncerts = 0;
+  if (cert)
+      g_tls_certificate_gnutls_copy (G_TLS_CERTIFICATE_GNUTLS (cert),
+                                     gnutls->priv->interaction_id, st);
 }
 
 static void
@@ -450,6 +448,8 @@ begin_gnutls_io (GTlsConnectionGnutls  *gnutls,
   gnutls->priv->blocking = blocking;
   gnutls->priv->cancellable = cancellable;
   gnutls->priv->internal_direction = 0;
+  if (cancellable)
+    g_cancellable_push_current (cancellable);
   g_clear_error (&gnutls->priv->error);
 }
 
@@ -458,6 +458,8 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
 	       int                    status,
 	       GError               **error)
 {
+  if (gnutls->priv->cancellable)
+    g_cancellable_pop_current (gnutls->priv->cancellable);
   gnutls->priv->cancellable = NULL;
 
   if (status >= 0)
@@ -471,6 +473,7 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
       if (g_error_matches (gnutls->priv->error, G_IO_ERROR, G_IO_ERROR_FAILED) ||
 	  status == GNUTLS_E_UNEXPECTED_PACKET_LENGTH ||
 	  status == GNUTLS_E_FATAL_ALERT_RECEIVED ||
+	  status == GNUTLS_E_DECRYPTION_FAILED ||
 	  status == GNUTLS_E_UNSUPPORTED_VERSION_PACKET)
 	{
 	  g_clear_error (&gnutls->priv->error);
@@ -484,6 +487,8 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
     {
       if (g_error_matches (gnutls->priv->error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK))
 	status = GNUTLS_E_AGAIN;
+      else
+	G_TLS_CONNECTION_GNUTLS_GET_CLASS (gnutls)->failed (gnutls);
       g_propagate_error (error, gnutls->priv->error);
       gnutls->priv->error = NULL;
       return status;
@@ -500,19 +505,23 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
       gnutls->priv->need_handshake = TRUE;
       return status;
     }
-  else if (status == GNUTLS_E_UNEXPECTED_PACKET_LENGTH)
+  else if (
+#ifdef GNUTLS_E_PREMATURE_TERMINATION
+	   status == GNUTLS_E_PREMATURE_TERMINATION
+#else
+	   status == GNUTLS_E_UNEXPECTED_PACKET_LENGTH && gnutls->priv->eof
+#endif
+	   )
     {
-      if (gnutls->priv->eof)
+      if (gnutls->priv->require_close_notify)
 	{
-	  if (gnutls->priv->require_close_notify)
-	    {
-	      g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_EOF,
-				   _("TLS connection closed unexpectedly"));
-	      return status;
-	    }
-	  else
-	    return 0;
+	  g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_EOF,
+			       _("TLS connection closed unexpectedly"));
+	  G_TLS_CONNECTION_GNUTLS_GET_CLASS (gnutls)->failed (gnutls);
+	  return status;
 	}
+      else
+	return 0;
     }
 
   return status;
@@ -527,7 +536,7 @@ end_gnutls_io (GTlsConnectionGnutls  *gnutls,
             ret == GNUTLS_E_WARNING_ALERT_RECEIVED) &&	\
            !gnutls->priv->error);			\
   ret = end_gnutls_io (gnutls, ret, error);		\
-  if (ret < 0 && error && !*error)			\
+  if (ret < 0 && ret != GNUTLS_E_REHANDSHAKE && error && !*error) \
     {							\
       g_set_error (error, G_TLS_ERROR, G_TLS_ERROR_MISC,\
                    errmsg, gnutls_strerror (ret));	\
@@ -668,7 +677,7 @@ static GSourceFuncs gnutls_source_funcs =
   gnutls_source_dispatch,
   gnutls_source_finalize,
   (GSourceFunc)g_tls_connection_gnutls_source_closure_callback,
-  (GSourceDummyMarshal)_gnutls_marshal_BOOLEAN__VOID,
+  (GSourceDummyMarshal)g_cclosure_marshal_generic
 };
 
 GSource *
@@ -747,8 +756,10 @@ g_tls_connection_gnutls_pull_func (gnutls_transport_ptr_t  transport_data,
 
   if (ret < 0)
     set_gnutls_error (gnutls, G_IO_IN);
+#ifndef GNUTLS_E_PREMATURE_TERMINATION
   else if (ret == 0)
     gnutls->priv->eof = TRUE;
+#endif
 
   return ret;
 }
@@ -795,7 +806,8 @@ handshake_internal (GTlsConnectionGnutls  *gnutls,
   int ret;
 
   if (G_IS_TLS_SERVER_CONNECTION_GNUTLS (gnutls) &&
-      gnutls->priv->ever_handshaked && !gnutls->priv->need_handshake)
+      gnutls->priv->ever_handshaked && !gnutls->priv->handshaking &&
+      !gnutls->priv->need_handshake)
     {
       BEGIN_GNUTLS_IO (gnutls, blocking, cancellable);
       ret = gnutls_rehandshake (gnutls->priv->session);
@@ -860,43 +872,26 @@ handshake_internal (GTlsConnectionGnutls  *gnutls,
 
   if (peer_certificate)
     {
-      int status;
+      gboolean accepted;
 
-      status = gnutls_certificate_verify_peers (gnutls->priv->session);
-      peer_certificate_errors = g_tls_certificate_gnutls_convert_flags (status);
-      if (peer_certificate_errors)
-	{
-	  /* gnutls_certificate_verify_peers() bails out on the first
-	   * error, which may be G_TLS_CERTIFICATE_UNKNOWN_CA, but the
-	   * caller may be planning to check that part themselves. So
-	   * call g_tls_certificate_verify() to get any other errors.
-	   */
-	  peer_certificate_errors |= g_tls_certificate_verify (peer_certificate, NULL, NULL);
-	}
+      accepted = G_TLS_CONNECTION_GNUTLS_GET_CLASS (gnutls)->verify_peer (gnutls, peer_certificate, &peer_certificate_errors);
 
-      if (!G_TLS_CONNECTION_GNUTLS_GET_CLASS (gnutls)->verify_peer (gnutls, peer_certificate, &peer_certificate_errors))
-	{
-	  g_object_unref (peer_certificate);
-	  g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_BAD_CERTIFICATE,
-			       _("Unacceptable TLS certificate"));
-	  return FALSE;
-	}
-    }
-
-  G_TLS_CONNECTION_GNUTLS_GET_CLASS (gnutls)->finish_handshake (gnutls, error);
-
-  if (ret == 0)
-    {
       gnutls->priv->peer_certificate = peer_certificate;
       gnutls->priv->peer_certificate_errors = peer_certificate_errors;
 
       g_object_notify (G_OBJECT (gnutls), "peer-certificate");
       g_object_notify (G_OBJECT (gnutls), "peer-certificate-errors");
 
-      return TRUE;
+      if (!accepted)
+	{
+	  g_set_error_literal (error, G_TLS_ERROR, G_TLS_ERROR_BAD_CERTIFICATE,
+			       _("Unacceptable TLS certificate"));
+	  return FALSE;
+	}
     }
-  else
-    return FALSE;
+
+  G_TLS_CONNECTION_GNUTLS_GET_CLASS (gnutls)->finish_handshake (gnutls, ret == 0, error);
+  return (ret == 0);
 }
 
 static gboolean
@@ -974,6 +969,7 @@ g_tls_connection_gnutls_handshake_async (GTlsConnection       *conn,
       g_simple_async_result_set_op_res_gboolean (simple, TRUE);
       g_simple_async_result_complete_in_idle (simple);
       g_object_unref (simple);
+      return;
     }
   else if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK))
     {
@@ -981,7 +977,10 @@ g_tls_connection_gnutls_handshake_async (GTlsConnection       *conn,
       g_error_free (error);
       g_simple_async_result_complete_in_idle (simple);
       g_object_unref (simple);
+      return;
     }
+  else if (error)
+    g_error_free (error);
 
   source = g_tls_connection_gnutls_create_source (gnutls, 0, cancellable);
   g_source_set_callback (source,
@@ -1088,7 +1087,7 @@ close_internal (GTlsConnectionGnutls  *gnutls,
   /* If we haven't finished the initial handshake yet, there's no
    * reason to finish it just so we can close.
    */
-  if (gnutls->priv->handshaking && !gnutls->priv->ever_handshaked)
+  if (!gnutls->priv->ever_handshaked)
     return TRUE;
 
   if (handshake_in_progress_or_failed (gnutls, blocking, cancellable, error))
@@ -1219,7 +1218,7 @@ g_tls_connection_gnutls_close_async (GIOStream           *stream,
 
   acd = g_slice_new (AsyncCloseData);
   acd->simple = simple;
-  acd->cancellable = g_object_ref (cancellable);
+  acd->cancellable = cancellable ? g_object_ref (cancellable) : cancellable;
   acd->io_priority = io_priority;
 
   if (success)
@@ -1254,4 +1253,96 @@ g_tls_connection_gnutls_close_finish (GIOStream           *stream,
     return FALSE;
 
   return g_simple_async_result_get_op_res_gboolean (simple);
+}
+
+#ifdef HAVE_PKCS11
+
+static P11KitPin*
+on_pin_prompt_callback (const char     *pinfile,
+                        P11KitUri      *pin_uri,
+                        const char     *pin_description,
+                        P11KitPinFlags  pin_flags,
+                        void           *callback_data)
+{
+  GTlsConnectionGnutls *gnutls = G_TLS_CONNECTION_GNUTLS (callback_data);
+  GTlsInteractionResult result;
+  GTlsPasswordFlags flags = 0;
+  GTlsPassword *password;
+  P11KitPin *pin = NULL;
+  GError *error = NULL;
+
+  if (!gnutls->priv->interaction)
+    return NULL;
+
+  if (pin_flags & P11_KIT_PIN_FLAGS_RETRY)
+    flags |= G_TLS_PASSWORD_RETRY;
+  if (pin_flags & P11_KIT_PIN_FLAGS_MANY_TRIES)
+    flags |= G_TLS_PASSWORD_MANY_TRIES;
+  if (pin_flags & P11_KIT_PIN_FLAGS_FINAL_TRY)
+    flags |= G_TLS_PASSWORD_FINAL_TRY;
+
+  password = g_pkcs11_pin_new (flags, pin_description);
+
+  result = g_tls_interaction_ask_password (gnutls->priv->interaction, password,
+                                           g_cancellable_get_current (), &error);
+
+  switch (result)
+    {
+    case G_TLS_INTERACTION_FAILED:
+      if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+        g_warning ("couldn't ask for password: %s", error->message);
+      pin = NULL;
+      break;
+    case G_TLS_INTERACTION_UNHANDLED:
+      pin = NULL;
+      break;
+    case G_TLS_INTERACTION_HANDLED:
+      pin = g_pkcs11_pin_steal_internal (G_PKCS11_PIN (password));
+      break;
+    }
+
+  g_object_unref (password);
+  return pin;
+}
+
+#endif /* HAVE_PKCS11 */
+
+static void
+g_tls_connection_gnutls_class_init (GTlsConnectionGnutlsClass *klass)
+{
+  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
+  GTlsConnectionClass *connection_class = G_TLS_CONNECTION_CLASS (klass);
+  GIOStreamClass *iostream_class = G_IO_STREAM_CLASS (klass);
+
+  g_type_class_add_private (klass, sizeof (GTlsConnectionGnutlsPrivate));
+
+  gobject_class->get_property = g_tls_connection_gnutls_get_property;
+  gobject_class->set_property = g_tls_connection_gnutls_set_property;
+  gobject_class->finalize     = g_tls_connection_gnutls_finalize;
+
+  connection_class->handshake        = g_tls_connection_gnutls_handshake;
+  connection_class->handshake_async  = g_tls_connection_gnutls_handshake_async;
+  connection_class->handshake_finish = g_tls_connection_gnutls_handshake_finish;
+
+  iostream_class->get_input_stream  = g_tls_connection_gnutls_get_input_stream;
+  iostream_class->get_output_stream = g_tls_connection_gnutls_get_output_stream;
+  iostream_class->close_fn          = g_tls_connection_gnutls_close;
+  iostream_class->close_async       = g_tls_connection_gnutls_close_async;
+  iostream_class->close_finish      = g_tls_connection_gnutls_close_finish;
+
+  g_object_class_override_property (gobject_class, PROP_BASE_IO_STREAM, "base-io-stream");
+  g_object_class_override_property (gobject_class, PROP_REQUIRE_CLOSE_NOTIFY, "require-close-notify");
+  g_object_class_override_property (gobject_class, PROP_REHANDSHAKE_MODE, "rehandshake-mode");
+  g_object_class_override_property (gobject_class, PROP_USE_SYSTEM_CERTDB, "use-system-certdb");
+  g_object_class_override_property (gobject_class, PROP_DATABASE, "database");
+  g_object_class_override_property (gobject_class, PROP_CERTIFICATE, "certificate");
+  g_object_class_override_property (gobject_class, PROP_INTERACTION, "interaction");
+  g_object_class_override_property (gobject_class, PROP_PEER_CERTIFICATE, "peer-certificate");
+  g_object_class_override_property (gobject_class, PROP_PEER_CERTIFICATE_ERRORS, "peer-certificate-errors");
+}
+
+static void
+g_tls_connection_gnutls_initable_iface_init (GInitableIface *iface)
+{
+  iface->init = g_tls_connection_gnutls_initable_init;
 }

@@ -1,6 +1,6 @@
-/* GIO - GLib Certificate, Output and Gnutlsing Library
+/* GIO - GLib Input, Output and Streaming Library
  *
- * Copyright © 2009 Red Hat, Inc.
+ * Copyright 2009 Red Hat, Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -32,6 +32,10 @@ typedef struct _GTlsCertificateGnutls                          GTlsCertificateGn
 struct _GTlsCertificateGnutlsClass
 {
   GTlsCertificateClass parent_class;
+
+  void              (*copy)               (GTlsCertificateGnutls    *gnutls,
+                                           const gchar              *interaction_id,
+                                           gnutls_retr2_st          *st);
 };
 
 struct _GTlsCertificateGnutls
@@ -43,19 +47,27 @@ struct _GTlsCertificateGnutls
 GType g_tls_certificate_gnutls_get_type (void) G_GNUC_CONST;
 
 GTlsCertificate *            g_tls_certificate_gnutls_new             (const gnutls_datum    *datum,
-								       GTlsCertificate       *issuer);
+                                                                       GTlsCertificate       *issuer);
+
+void                         g_tls_certificate_gnutls_set_data        (GTlsCertificateGnutls *gnutls,
+                                                                       const gnutls_datum *datum);
 
 const gnutls_x509_crt_t      g_tls_certificate_gnutls_get_cert        (GTlsCertificateGnutls *gnutls);
-const gnutls_x509_privkey_t  g_tls_certificate_gnutls_get_key         (GTlsCertificateGnutls *gnutls);
+gboolean                     g_tls_certificate_gnutls_has_key         (GTlsCertificateGnutls *gnutls);
 
-gnutls_x509_crt_t            g_tls_certificate_gnutls_copy_cert       (GTlsCertificateGnutls *gnutls);
-gnutls_x509_privkey_t        g_tls_certificate_gnutls_copy_key        (GTlsCertificateGnutls *gnutls);
+void                         g_tls_certificate_gnutls_copy            (GTlsCertificateGnutls *gnutls,
+                                                                       const gchar           *interaction_id,
+                                                                       gnutls_retr2_st       *st);
 
 GTlsCertificateFlags         g_tls_certificate_gnutls_verify_identity (GTlsCertificateGnutls *gnutls,
 								       GSocketConnectable    *identity);
 
 GTlsCertificateFlags         g_tls_certificate_gnutls_convert_flags   (guint                  gnutls_flags);
 
+void                         g_tls_certificate_gnutls_set_issuer      (GTlsCertificateGnutls *gnutls,
+                                                                       GTlsCertificateGnutls *issuer);
+
+GTlsCertificateGnutls*       g_tls_certificate_gnutls_steal_issuer    (GTlsCertificateGnutls *gnutls);
 
 G_END_DECLS
 

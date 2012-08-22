@@ -18,6 +18,9 @@
 /* Define to 1 if you have the <dlfcn.h> header file. */
 #undef HAVE_DLFCN_H
 
+/* Whether you have gcov */
+#undef HAVE_GCOV
+
 /* Define if the GNU gettext() function is already present or preinstalled. */
 #undef HAVE_GETTEXT
 
@@ -32,6 +35,9 @@
 
 /* Define to 1 if you have the <memory.h> header file. */
 #undef HAVE_MEMORY_H
+
+/* Building with PKCS#11 support */
+#undef HAVE_PKCS11
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H

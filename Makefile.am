@@ -13,9 +13,17 @@ if HAVE_GNOME_PROXY
 SUBDIRS += proxy/gnome
 endif
 
+SUBDIRS += proxy/tests
+
+if HAVE_PKCS11
+SUBDIRS += tls/pkcs11
+endif
+
 if HAVE_GNUTLS
 SUBDIRS += tls/gnutls
 endif
+
+SUBDIRS += tls/tests
 
 install-exec-hook:
 	if test -n "$(GIO_QUERYMODULES)" -a -z "$(DESTDIR)"; then \

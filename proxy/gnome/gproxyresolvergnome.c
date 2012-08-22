@@ -1,6 +1,6 @@
 /* GIO - GLib Input, Output and Streaming Library
  *
- * Copyright (C) 2010 Red Hat, Inc.
+ * Copyright 2010 Red Hat, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -13,9 +13,8 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General
- * Public License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place, Suite 330,
- * Boston, MA 02111-1307, USA.
+ * Public License along with this library; if not, see
+ * <http://www.gnu.org/licenses/>.
  */
 
 #include "config.h"
@@ -33,31 +32,30 @@
 #define GNOME_PROXY_IGNORE_HOSTS_KEY      "ignore-hosts"
 #define GNOME_PROXY_USE_SAME_PROXY_KEY    "use-same-proxy"
 
-#define GNOME_PROXY_HTTP_SETTINGS_SCHEMA  "org.gnome.system.proxy.http"
-#define GNOME_PROXY_HTTP_ENABLED_KEY      "enabled"
+#define GNOME_PROXY_HTTP_CHILD_SCHEMA     "http"
 #define GNOME_PROXY_HTTP_HOST_KEY         "host"
 #define GNOME_PROXY_HTTP_PORT_KEY         "port"
 #define GNOME_PROXY_HTTP_USE_AUTH_KEY     "use-authentication"
 #define GNOME_PROXY_HTTP_USER_KEY         "authentication-user"
 #define GNOME_PROXY_HTTP_PASSWORD_KEY     "authentication-password"
 
-#define GNOME_PROXY_HTTPS_SETTINGS_SCHEMA "org.gnome.system.proxy.https"
+#define GNOME_PROXY_HTTPS_CHILD_SCHEMA    "https"
 #define GNOME_PROXY_HTTPS_HOST_KEY        "host"
 #define GNOME_PROXY_HTTPS_PORT_KEY        "port"
 
-#define GNOME_PROXY_FTP_SETTINGS_SCHEMA   "org.gnome.system.proxy.ftp"
+#define GNOME_PROXY_FTP_CHILD_SCHEMA      "ftp"
 #define GNOME_PROXY_FTP_HOST_KEY          "host"
 #define GNOME_PROXY_FTP_PORT_KEY          "port"
 
-#define GNOME_PROXY_SOCKS_SETTINGS_SCHEMA "org.gnome.system.proxy.socks"
+#define GNOME_PROXY_SOCKS_CHILD_SCHEMA    "socks"
 #define GNOME_PROXY_SOCKS_HOST_KEY        "host"
 #define GNOME_PROXY_SOCKS_PORT_KEY        "port"
 
 typedef struct {
-  GSocketFamily family;
-  guint8        mask[16];
+  gchar        *name;
   gint          length;
-} GProxyResolverGnomeIPMask;
+  gushort       port;
+} GProxyResolverGnomeDomain;
 
 struct _GProxyResolverGnome {
   GObject parent_instance;
@@ -72,15 +70,16 @@ struct _GProxyResolverGnome {
   GDesktopProxyMode mode;
   gchar *autoconfig_url;
   gboolean use_same_proxy;
-  gchar **ignore_hosts;
-  GProxyResolverGnomeIPMask *ignore_ips;
+
+  GPtrArray *ignore_ips;
+  GProxyResolverGnomeDomain *ignore_domains;
 
   gchar *http_proxy, *https_proxy;
   gchar *ftp_proxy, *socks_authority;
 
   GDBusProxy *pacrunner;
 
-  GMutex *lock;
+  GMutex lock;
 };
 
 static void g_proxy_resolver_gnome_iface_init (GProxyResolverInterface *iface);
@@ -99,14 +98,22 @@ g_proxy_resolver_gnome_class_finalize (GProxyResolverGnomeClass *klass)
 static void
 free_settings (GProxyResolverGnome *resolver)
 {
-  g_free (resolver->autoconfig_url);
-  g_strfreev (resolver->ignore_hosts);
-  g_free (resolver->ignore_ips);
+  int i;
+
+  if (resolver->ignore_ips)
+    g_ptr_array_free (resolver->ignore_ips, TRUE);
+  if (resolver->ignore_domains)
+    {
+      for (i = 0; resolver->ignore_domains[i].name; i++)
+	g_free (resolver->ignore_domains[i].name);
+      g_free (resolver->ignore_domains);
+    }
 
   g_free (resolver->http_proxy);
   g_free (resolver->https_proxy);
   g_free (resolver->ftp_proxy);
   g_free (resolver->socks_authority);
+  g_free (resolver->autoconfig_url);
 }
 
 static void
@@ -116,9 +123,9 @@ gsettings_changed (GSettings   *settings,
 {
   GProxyResolverGnome *resolver = user_data;
 
-  g_mutex_lock (resolver->lock);
+  g_mutex_lock (&resolver->lock);
   resolver->need_update = TRUE;
-  g_mutex_unlock (resolver->lock);
+  g_mutex_unlock (&resolver->lock);
 }
 
 static void
@@ -159,7 +166,7 @@ g_proxy_resolver_gnome_finalize (GObject *object)
   if (resolver->pacrunner)
     g_object_unref (resolver->pacrunner);
 
-  g_mutex_free (resolver->lock);
+  g_mutex_clear (&resolver->lock);
 
   G_OBJECT_CLASS (g_proxy_resolver_gnome_parent_class)->finalize (object);
 }
@@ -167,21 +174,25 @@ g_proxy_resolver_gnome_finalize (GObject *object)
 static void
 g_proxy_resolver_gnome_init (GProxyResolverGnome *resolver)
 {
-  resolver->lock = g_mutex_new ();
+  g_mutex_init (&resolver->lock);
 
   resolver->proxy_settings = g_settings_new (GNOME_PROXY_SETTINGS_SCHEMA);
   g_signal_connect (resolver->proxy_settings, "changed",
 		    G_CALLBACK (gsettings_changed), resolver);
-  resolver->http_settings = g_settings_new (GNOME_PROXY_HTTP_SETTINGS_SCHEMA);
+  resolver->http_settings = g_settings_get_child (resolver->proxy_settings,
+                                                  GNOME_PROXY_HTTP_CHILD_SCHEMA);
   g_signal_connect (resolver->http_settings, "changed",
 		    G_CALLBACK (gsettings_changed), resolver);
-  resolver->https_settings = g_settings_new (GNOME_PROXY_HTTPS_SETTINGS_SCHEMA);
+  resolver->https_settings = g_settings_get_child (resolver->proxy_settings,
+                                                   GNOME_PROXY_HTTPS_CHILD_SCHEMA);
   g_signal_connect (resolver->https_settings, "changed",
 		    G_CALLBACK (gsettings_changed), resolver);
-  resolver->ftp_settings = g_settings_new (GNOME_PROXY_FTP_SETTINGS_SCHEMA);
+  resolver->ftp_settings = g_settings_get_child (resolver->proxy_settings,
+                                                 GNOME_PROXY_FTP_CHILD_SCHEMA);
   g_signal_connect (resolver->ftp_settings, "changed",
 		    G_CALLBACK (gsettings_changed), resolver);
-  resolver->socks_settings = g_settings_new (GNOME_PROXY_SOCKS_SETTINGS_SCHEMA);
+  resolver->socks_settings = g_settings_get_child (resolver->proxy_settings,
+                                                   GNOME_PROXY_SOCKS_CHILD_SCHEMA);
   g_signal_connect (resolver->socks_settings, "changed",
 		    G_CALLBACK (gsettings_changed), resolver);
 
@@ -192,6 +203,7 @@ g_proxy_resolver_gnome_init (GProxyResolverGnome *resolver)
 static void
 update_settings (GProxyResolverGnome *resolver)
 {
+  gchar **ignore_hosts;
   gchar *host;
   guint port;
   int i;
@@ -207,86 +219,128 @@ update_settings (GProxyResolverGnome *resolver)
   resolver->use_same_proxy =
     g_settings_get_boolean (resolver->proxy_settings, GNOME_PROXY_USE_SAME_PROXY_KEY);
 
-  resolver->ignore_hosts =
+  ignore_hosts =
     g_settings_get_strv (resolver->proxy_settings, GNOME_PROXY_IGNORE_HOSTS_KEY);
-
-  if (resolver->ignore_hosts && resolver->ignore_hosts[0])
+  if (ignore_hosts && ignore_hosts[0])
     {
-      GArray *ignore_ips;
-      gchar *slash;
+      GPtrArray *ignore_ips;
+      GArray *ignore_domains;
+      gchar *host, *tmp, *colon, *bracket;
       GInetAddress *iaddr;
-      GProxyResolverGnomeIPMask mask;
+      GInetAddressMask *mask;
+      GProxyResolverGnomeDomain domain;
+      gushort port;
 
-      ignore_ips = g_array_new (TRUE, FALSE, sizeof (GProxyResolverGnomeIPMask));
-      for (i = 0; resolver->ignore_hosts[i]; i++)
+      ignore_ips = g_ptr_array_new_with_free_func (g_object_unref);
+      ignore_domains = g_array_new (TRUE, FALSE, sizeof (GProxyResolverGnomeDomain));
+
+      for (i = 0; ignore_hosts[i]; i++)
 	{
-	  host = resolver->ignore_hosts[i];
-	  slash = strchr (host, '/');
-	  if (slash)
-	    host = g_strndup (host, slash - host);
+	  host = g_strchomp (ignore_hosts[i]);
+
+	  /* See if it's an IP address or IP/length mask */
+	  mask = g_inet_address_mask_new_from_string (host, NULL);
+	  if (mask)
+	    {
+	      g_ptr_array_add (ignore_ips, mask);
+	      continue;
+	    }
+
+	  port = 0;
+
+	  if (*host == '[')
+	    {
+	      /* [IPv6]:port */
+	      host++;
+	      bracket = strchr (host, ']');
+	      if (!bracket || !bracket[1] || bracket[1] != ':')
+		goto bad;
+
+	      port = strtoul (bracket + 2, &tmp, 10);
+	      if (*tmp)
+		goto bad;
+
+	      *bracket = '\0';
+	    }
+	  else
+	    {
+	      colon = strchr (host, ':');
+	      if (colon && !strchr (colon + 1, ':'))
+		{
+		  /* hostname:port or IPv4:port */
+		  port = strtoul (colon + 1, &tmp, 10);
+		  if (*tmp)
+		    goto bad;
+		  *colon = '\0';
+		}
+	    }
+
 	  iaddr = g_inet_address_new_from_string (host);
 	  if (iaddr)
+	    g_object_unref (iaddr);
+	  else
 	    {
-	      int addrlen = g_inet_address_get_native_size (iaddr);
-
-	      memset (&mask, 0, sizeof (mask));
-	      mask.family = g_inet_address_get_family (iaddr);
-	      memcpy (mask.mask, g_inet_address_to_bytes (iaddr), addrlen);
-	      if (slash)
-		{
-		  mask.length = atoi (slash + 1);
-		  if (mask.length > addrlen * 8)
-		    {
-		      g_warning("ignore_host '%s' has invalid mask length",
-				resolver->ignore_hosts[i]);
-		      mask.length = addrlen;
-		    }
-		}
-	      else
-		mask.length = 0;
-
-	      g_array_append_val (ignore_ips, mask);
-
-	      g_object_unref (iaddr);
+	      if (g_str_has_prefix (host, "*."))
+		host += 2;
+	      else if (*host == '.')
+		host++;
 	    }
-	  if (slash)
-	    g_free (host);
+
+	  memset (&domain, 0, sizeof (domain));
+	  domain.name = g_strdup (host);
+	  domain.length = strlen (domain.name);
+	  domain.port = port;
+	  g_array_append_val (ignore_domains, domain);
+	  continue;
+
+	bad:
+	  g_warning ("Ignoring invalid ignore_hosts value '%s'", host);
 	}
 
       if (ignore_ips->len)
-	resolver->ignore_ips = (GProxyResolverGnomeIPMask *)g_array_free (ignore_ips, FALSE);
+	resolver->ignore_ips = ignore_ips;
       else
 	{
-	  g_array_free (ignore_ips, TRUE);
+	  g_ptr_array_free (ignore_ips, TRUE);
 	  resolver->ignore_ips = NULL;
 	}
+
+      resolver->ignore_domains = (GProxyResolverGnomeDomain *)
+	g_array_free (ignore_domains, ignore_domains->len == 0);
     }
   else
-    resolver->ignore_ips = NULL;
+    {
+      resolver->ignore_ips = NULL;
+      resolver->ignore_domains = NULL;
+    }
+  g_strfreev (ignore_hosts);
 
   host = g_settings_get_string (resolver->http_settings, GNOME_PROXY_HTTP_HOST_KEY);
   port = g_settings_get_int (resolver->http_settings, GNOME_PROXY_HTTP_PORT_KEY);
 
-  if (g_settings_get_boolean (resolver->http_settings, GNOME_PROXY_HTTP_USE_AUTH_KEY))
+  if (host && *host)
     {
-      gchar *user, *password;
-      gchar *enc_user, *enc_password;
+      if (g_settings_get_boolean (resolver->http_settings, GNOME_PROXY_HTTP_USE_AUTH_KEY))
+	{
+	  gchar *user, *password;
+	  gchar *enc_user, *enc_password;
 
-      user = g_settings_get_string (resolver->http_settings, GNOME_PROXY_HTTP_USER_KEY);
-      enc_user = g_uri_escape_string (user, NULL, TRUE);
-      g_free (user);
-      password = g_settings_get_string (resolver->http_settings, GNOME_PROXY_HTTP_PASSWORD_KEY);
-      enc_password = g_uri_escape_string (password, NULL, TRUE);
-      g_free (password);
+	  user = g_settings_get_string (resolver->http_settings, GNOME_PROXY_HTTP_USER_KEY);
+	  enc_user = g_uri_escape_string (user, NULL, TRUE);
+	  g_free (user);
+	  password = g_settings_get_string (resolver->http_settings, GNOME_PROXY_HTTP_PASSWORD_KEY);
+	  enc_password = g_uri_escape_string (password, NULL, TRUE);
+	  g_free (password);
 
-      resolver->http_proxy = g_strdup_printf ("http://%s:%s@%s:%u",
-					      enc_user, enc_password,
-					      host, port);
-      g_free (enc_user);
-      g_free (enc_password);
+	  resolver->http_proxy = g_strdup_printf ("http://%s:%s@%s:%u",
+						  enc_user, enc_password,
+						  host, port);
+	  g_free (enc_user);
+	  g_free (enc_password);
+	}
+      else
+	resolver->http_proxy = g_strdup_printf ("http://%s:%u", host, port);
     }
-  else
-    resolver->http_proxy = g_strdup_printf ("http://%s:%u", host, port);
   g_free (host);
 
   host = g_settings_get_string (resolver->https_settings, GNOME_PROXY_HTTPS_HOST_KEY);
@@ -342,62 +396,13 @@ g_proxy_resolver_gnome_is_supported (GProxyResolver *object)
 }
 
 static gboolean
-parse_uri (const gchar  *uri,
-	   gchar       **scheme,
-	   gchar       **host)
-{
-  const gchar *authority, *hoststart, *hostend, *at, *colon, *slash;
-
-  colon = strchr (uri, ':');
-  if (!colon || strncmp (colon, "://", 3) != 0)
-    return FALSE;
-
-  *scheme = g_strndup (uri, colon - uri);
-
-  authority = colon + 3;
-  colon = strchr (authority, ':');
-  slash = strchr (authority, '/');
-  if (colon && (!slash || colon < slash))
-    hostend = colon;
-  else if (slash)
-    hostend = slash;
-  else
-    hostend = authority + strlen (authority);
-
-  at = strchr (authority, '@');
-  if (at && at < hostend)
-    hoststart = at + 1;
-  else
-    hoststart = authority;
-  *host = g_strndup (hoststart, hostend - hoststart);
-
-  return TRUE;
-}
-
-static gboolean
-masked_compare (const guint8 *mask,
-		const guint8 *addr,
-		int           maskbits)
-{
-  int bytes, bits;
-
-  if (maskbits == 0)
-    return TRUE;
-
-  bytes = maskbits / 8;
-  if (bytes != 0 && memcmp (mask, addr, bytes) != 0)
-    return FALSE;
-
-  bits = maskbits % 8;
-  return mask[bytes] == (addr[bytes] & (0xFF << (8 - bits)));
-}
-
-static gboolean
 ignore_host (GProxyResolverGnome *resolver,
-	     const gchar         *host)
+	     const gchar         *host,
+	     gushort              port)
 {
+  gchar *ascii_host = NULL;
   gboolean ignore = FALSE;
-  gint i;
+  gint i, length, offset;
 
   if (resolver->ignore_ips)
     {
@@ -406,14 +411,11 @@ ignore_host (GProxyResolverGnome *resolver,
       iaddr = g_inet_address_new_from_string (host);
       if (iaddr)
 	{
-	  GSocketFamily family = g_inet_address_get_family (iaddr);
-	  const guint8 *addr = g_inet_address_to_bytes (iaddr);
-
-	  for (i = 0; resolver->ignore_ips[i].length; i++)
+	  for (i = 0; i < resolver->ignore_ips->len; i++)
 	    {
-	      if (resolver->ignore_ips[i].family == family &&
-		  masked_compare (resolver->ignore_ips[i].mask, addr,
-				  resolver->ignore_ips[i].length))
+	      GInetAddressMask *mask = resolver->ignore_ips->pdata[i];
+
+	      if (g_inet_address_mask_matches (mask, iaddr))
 		{
 		  ignore = TRUE;
 		  break;
@@ -421,29 +423,33 @@ ignore_host (GProxyResolverGnome *resolver,
 	    }
 
 	  g_object_unref (iaddr);
-	  return ignore;
+	  if (ignore)
+	    return TRUE;
 	}
     }
 
-  if (resolver->ignore_hosts && resolver->ignore_hosts[0])
+  if (g_hostname_is_non_ascii (host))
+    host = ascii_host = g_hostname_to_ascii (host);
+  length = strlen (host);
+
+  if (resolver->ignore_domains)
     {
-      gchar *ascii_host = NULL;
-
-      if (g_hostname_is_non_ascii (host))
-	host = ascii_host = g_hostname_to_ascii (host);
-
-      for (i = 0; resolver->ignore_hosts[i]; i++)
+      for (i = 0; resolver->ignore_domains[i].length; i++)
 	{
-	  if (!g_ascii_strcasecmp (host, resolver->ignore_hosts[i]))
+	  GProxyResolverGnomeDomain *domain = &resolver->ignore_domains[i];
+
+	  offset = length - domain->length;
+	  if ((domain->port == 0 || domain->port == port) &&
+	      (offset == 0 || (offset > 0 && host[offset - 1] == '.')) &&
+	      (g_ascii_strcasecmp (domain->name, host + offset) == 0))
 	    {
 	      ignore = TRUE;
 	      break;
 	    }
 	}
-
-      g_free (ascii_host);
     }
 
+  g_free (ascii_host);
   return ignore;
 }
 
@@ -454,22 +460,29 @@ g_proxy_resolver_gnome_lookup (GProxyResolver  *proxy_resolver,
 			       GError         **error)
 {
   GProxyResolverGnome *resolver = G_PROXY_RESOLVER_GNOME (proxy_resolver);
-  gchar *scheme = NULL, *host = NULL;
+  GSocketConnectable *addr = NULL;
+  const gchar *scheme = NULL, *host = NULL;
   const gchar *proxy = "direct://";
   gchar **proxies = NULL;
+  gushort port;
 
-  g_mutex_lock (resolver->lock);
+  g_mutex_lock (&resolver->lock);
   if (resolver->need_update)
     update_settings (resolver);
-  g_mutex_unlock (resolver->lock);
+  g_mutex_unlock (&resolver->lock);
 
   if (resolver->mode == G_DESKTOP_PROXY_MODE_NONE)
     goto done;
 
   /* FIXME: use guri when it lands... */
-  if (!parse_uri (uri, &scheme, &host))
+  addr = g_network_address_parse_uri (uri, 0, error);
+  if (!addr)
     goto done;
-  if (ignore_host (resolver, host))
+  scheme = g_network_address_get_scheme (G_NETWORK_ADDRESS (addr));
+  host = g_network_address_get_hostname (G_NETWORK_ADDRESS (addr));
+  port = g_network_address_get_port (G_NETWORK_ADDRESS (addr));
+
+  if (ignore_host (resolver, host, port))
     goto done;
 
   if (resolver->pacrunner)
@@ -517,8 +530,8 @@ g_proxy_resolver_gnome_lookup (GProxyResolver  *proxy_resolver,
     }
 
 done:
-  g_free (scheme);
-  g_free (host);
+  if (addr)
+    g_object_unref (addr);
 
   if (!proxies)
     {
