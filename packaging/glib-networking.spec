@@ -27,6 +27,9 @@ make %{?jobs:-j%jobs}
 
 %install
 rm -rf %{buildroot}
+mkdir -p %{buildroot}/usr/share/license
+cp COPYING %{buildroot}/usr/share/license/%{name}
+
 %make_install
 
 %find_lang glib-networking
@@ -37,6 +40,7 @@ rm -rf %{buildroot}
 %files -f glib-networking.lang
 %defattr(-,root,root,-)
 %{_libdir}/gio/modules/libgiognutls.so
+/usr/share/license/%{name}
 
 %changelog
 * Thu Nov 22 2012 praveen.ks <praveen.ks@samsung.com>
