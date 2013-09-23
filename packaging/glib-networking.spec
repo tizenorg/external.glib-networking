@@ -1,6 +1,6 @@
 Name:       glib-networking
 Summary:    Network extensions for GLib
-Version:    2.32.3_1.3
+Version:    2.32.3_1.4
 Release:    1
 Group:      System/Libraries
 License:    LGPLv2
@@ -43,6 +43,9 @@ cp COPYING %{buildroot}/usr/share/license/%{name}
 /usr/share/license/%{name}
 
 %changelog
+* Mon Sep 23 2013 Keunsoon Lee <keunsoon.lee@samsung.com>
+- [Release] Update changelog for glib-networking-2.32.3_1.4
+
 * Thu Nov 22 2012 praveen.ks <praveen.ks@samsung.com>
 - [Release] Update changelog for glib-networking-2.32.3_1.3
 
