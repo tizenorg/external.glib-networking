@@ -76,6 +76,10 @@ GSource *g_tls_connection_gnutls_create_source (GTlsConnectionGnutls  *gnutls,
 						GIOCondition           condition,
 						GCancellable          *cancellable);
 
+//#if ENABLE(TIZEN_NPN)
+gboolean g_tls_connection_gnutls_is_npn_set         (GTlsConnectionGnutls  *gnutls);
+//#endif
+
 G_END_DECLS
 
 #endif /* __G_TLS_CONNECTION_GNUTLS_H___ */

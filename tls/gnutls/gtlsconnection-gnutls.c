@@ -114,6 +114,9 @@ struct _GTlsConnectionGnutlsPrivate
   gboolean eof;
 #endif
   GIOCondition internal_direction;
+#if ENABLE(TIZEN_NPN)
+  gboolean is_npn_set;
+#endif
 };
 
 static gint unique_interaction_id = 0;
@@ -1031,6 +1034,16 @@ g_tls_connection_gnutls_handshake_finish (GTlsConnection       *conn,
 */
 #define __PROTOCOL_NAME_MAXLEN    8       /* http/1.1 */
 
+gboolean
+g_tls_connection_gnutls_is_npn_set (GTlsConnectionGnutls  *gnutls)
+{
+#if ENABLE(TIZEN_NPN)
+	return gnutls->priv->is_npn_set;
+#else
+	return FALSE;
+#endif
+}
+
 static void
 g_tls_connection_gnutls_set_next_protocols (GTlsConnectionGnutls  *gnutls,
             const gchar           *protocols)
@@ -1039,6 +1052,7 @@ g_tls_connection_gnutls_set_next_protocols (GTlsConnectionGnutls  *gnutls,
   g_return_if_fail (protocols);
 
 #if ENABLE(TIZEN_NPN)
+  gnutls->priv->is_npn_set = TRUE;
   gnutls_negotiate_next_protocol (gnutls->priv->session, protocols, strlen(protocols));
 #endif
 }
