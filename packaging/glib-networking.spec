@@ -1,16 +1,15 @@
 Name:       glib-networking
 Summary:    Network extensions for GLib
-Version: 2.32.3
+Version:    2.32.3_1.8
 Release:    1
 Group:      System/Libraries
-License:    LGPLv2
+License:    LGPL-2.0+
 URL:        http://git.gnome.org/browse/glib-networking/
-Source0:    http://ftp.gnome.org/pub/gnome/sources/%{name}/2.32/%{name}-%{version}.tar.xz
+Source0:    %{name}-%{version}.tar.gz
 
 BuildRequires:  pkgconfig(glib-2.0)
 BuildRequires:  pkgconfig(gnutls)
 BuildRequires:  intltool
-BuildRequires:  ca-certificates
 
 %description
 Networking extensions for GLib
@@ -27,17 +26,15 @@ make %{?jobs:-j%jobs}
 
 %install
 rm -rf %{buildroot}
+mkdir -p %{buildroot}/usr/share/license
+cp COPYING %{buildroot}/usr/share/license/%{name}
+
 %make_install
 
 %find_lang glib-networking
 
-
-
-
-
-
 %files -f glib-networking.lang
 %defattr(-,root,root,-)
 %{_libdir}/gio/modules/libgiognutls.so
-
-
+/usr/share/license/%{name}
+%manifest glib-networking.manifest

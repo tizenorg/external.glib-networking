@@ -37,6 +37,7 @@
 #endif
 
 #include <glib/gi18n-lib.h>
+#include <TIZEN.h>
 
 static ssize_t g_tls_connection_gnutls_push_func (gnutls_transport_ptr_t  transport_data,
 						  const void             *buf,
@@ -113,6 +114,9 @@ struct _GTlsConnectionGnutlsPrivate
   gboolean eof;
 #endif
   GIOCondition internal_direction;
+#if ENABLE(TIZEN_NPN)
+  gboolean is_npn_set;
+#endif
 };
 
 static gint unique_interaction_id = 0;
@@ -148,16 +152,27 @@ static void
 g_tls_connection_gnutls_init_priorities (void)
 {
   /* First field is "ssl3 only", second is "allow unsafe rehandshaking" */
-
+#if ENABLE(TIZEN_TLS11_AND_TLS12_SUPPORT_DISABLE)
+  gnutls_priority_init (&priorities[FALSE][FALSE],
+			"NORMAL:%COMPAT:!VERS-TLS1.2:!VERS-TLS1.1",
+			NULL);
+#else
   gnutls_priority_init (&priorities[FALSE][FALSE],
 			"NORMAL:%COMPAT",
 			NULL);
+#endif
   gnutls_priority_init (&priorities[TRUE][FALSE],
 			"NORMAL:%COMPAT:!VERS-TLS1.2:!VERS-TLS1.1:!VERS-TLS1.0",
 			NULL);
+#if ENABLE(TIZEN_TLS11_AND_TLS12_SUPPORT_DISABLE)
+  gnutls_priority_init (&priorities[FALSE][TRUE],
+			"NORMAL:%COMPAT:!VERS-TLS1.2:!VERS-TLS1.1:%UNSAFE_RENEGOTIATION",
+			NULL);
+#else
   gnutls_priority_init (&priorities[FALSE][TRUE],
 			"NORMAL:%COMPAT:%UNSAFE_RENEGOTIATION",
 			NULL);
+#endif
   gnutls_priority_init (&priorities[TRUE][TRUE],
 			"NORMAL:%COMPAT:!VERS-TLS1.2:!VERS-TLS1.1:!VERS-TLS1.0:%UNSAFE_RENEGOTIATION",
 			NULL);
@@ -1008,6 +1023,71 @@ g_tls_connection_gnutls_handshake_finish (GTlsConnection       *conn,
   return g_simple_async_result_get_op_res_gboolean (simple);
 }
 
+/* #if ENABLE(TIZEN_NPN) */
+/* Following two functions MUST be declared.
+ * Because glib2.0 already has following functions named set_next_protocols/get_next_protocol. */
+/*
+  available protocols as it is on Dec. 2012:
+    http/1.1
+    spdy/2
+    spdy/3
+*/
+#define __PROTOCOL_NAME_MAXLEN    8       /* http/1.1 */
+
+gboolean
+g_tls_connection_gnutls_is_npn_set (GTlsConnectionGnutls  *gnutls)
+{
+#if ENABLE(TIZEN_NPN)
+	return gnutls->priv->is_npn_set;
+#else
+	return FALSE;
+#endif
+}
+
+static void
+g_tls_connection_gnutls_set_next_protocols (GTlsConnectionGnutls  *gnutls,
+            const gchar           *protocols)
+{
+  g_return_if_fail (gnutls);
+  g_return_if_fail (protocols);
+
+#if ENABLE(TIZEN_NPN)
+  gnutls->priv->is_npn_set = TRUE;
+  gnutls_negotiate_next_protocol (gnutls->priv->session, protocols, strlen(protocols));
+#endif
+}
+
+static const gchar *
+g_tls_connection_gnutls_get_next_protocol (GTlsConnectionGnutls *gnutls)
+{
+#if ENABLE(TIZEN_NPN)
+  int gnutls_ret;
+  size_t size;
+  gchar buf[__PROTOCOL_NAME_MAXLEN];
+  gchar *ret_buf;
+  unsigned int supported;
+
+  g_return_val_if_fail (gnutls, NULL);
+
+  size = __PROTOCOL_NAME_MAXLEN;
+  gnutls_ret = gnutls_get_next_protocol (gnutls->priv->session, buf, &size, &supported);
+  if (!gnutls_ret)
+  {
+    ret_buf = g_new0 (gchar, size + 1);
+    memcpy (ret_buf, buf, size);
+
+    return ret_buf;
+  }
+  else
+  {
+    return NULL;
+  }
+#else
+  return NULL;
+#endif
+}
+/* #endif */
+
 gssize
 g_tls_connection_gnutls_read (GTlsConnectionGnutls  *gnutls,
 			      void                  *buffer,
@@ -1323,6 +1403,12 @@ g_tls_connection_gnutls_class_init (GTlsConnectionGnutlsClass *klass)
   connection_class->handshake        = g_tls_connection_gnutls_handshake;
   connection_class->handshake_async  = g_tls_connection_gnutls_handshake_async;
   connection_class->handshake_finish = g_tls_connection_gnutls_handshake_finish;
+
+  /* #if ENABLE(TIZEN_NPN) */
+  /* This code MUST be set because glib2.0 already has following functions named set_next_protocols/get_next_protocol. */
+  connection_class->set_next_protocols  = g_tls_connection_gnutls_set_next_protocols;
+  connection_class->get_next_protocol   = g_tls_connection_gnutls_get_next_protocol;
+  /* #endif */
 
   iostream_class->get_input_stream  = g_tls_connection_gnutls_get_input_stream;
   iostream_class->get_output_stream = g_tls_connection_gnutls_get_output_stream;
