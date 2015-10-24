@@ -29,6 +29,7 @@
 #include "gtlscertificate-gnutls.h"
 
 #include <glib/gi18n-lib.h>
+#include "TIZEN.h"
 
 G_DEFINE_ABSTRACT_TYPE (GTlsDatabaseGnutls, g_tls_database_gnutls, G_TYPE_TLS_DATABASE);
 
@@ -66,7 +67,9 @@ build_certificate_chain (GTlsDatabaseGnutls      *self,
 {
 
   GTlsCertificateGnutls *certificate;
+  GTlsCertificateGnutls *previous;
   GTlsCertificate *issuer;
+  gboolean certificate_is_from_db;
 
   g_assert (anchor);
   g_assert (chain);
@@ -81,7 +84,9 @@ build_certificate_chain (GTlsDatabaseGnutls      *self,
    */
 
   *anchor = NULL;
+  previous = NULL;
   certificate = chain;
+  certificate_is_from_db = FALSE;
 
   /* First check for pinned certificate */
   if (g_tls_database_gnutls_lookup_assertion (self, certificate,
@@ -118,15 +123,45 @@ build_certificate_chain (GTlsDatabaseGnutls      *self,
       /* Is it self-signed? */
       if (is_self_signed (certificate))
         {
+          /*
+           * Since at this point we would fail with 'self-signed', can we replace
+           * this certificate with one from the database and do better?
+           */
+          if (previous && !certificate_is_from_db)
+            {
+              issuer = g_tls_database_lookup_certificate_issuer (G_TLS_DATABASE (self),
+                                                                 G_TLS_CERTIFICATE (previous),
+                                                                 interaction,
+                                                                 G_TLS_DATABASE_LOOKUP_NONE,
+                                                                 cancellable, error);
+              if (*error)
+                {
+                  return STATUS_FAILURE;
+                }
+              else if (issuer)
+                {
+                  /* Replaced with certificate in the db, restart step again with this certificate */
+                  g_return_val_if_fail (G_IS_TLS_CERTIFICATE_GNUTLS (issuer), STATUS_FAILURE);
+                  g_tls_certificate_gnutls_set_issuer (previous, G_TLS_CERTIFICATE_GNUTLS (issuer));
+                  certificate = G_TLS_CERTIFICATE_GNUTLS (issuer);
+                  certificate_is_from_db = TRUE;
+                  continue;
+                }
+            }
+
           g_tls_certificate_gnutls_set_issuer (certificate, NULL);
           return STATUS_SELFSIGNED;
         }
+
+      previous = certificate;
 
       /* Bring over the next certificate in the chain */
       issuer = g_tls_certificate_get_issuer (G_TLS_CERTIFICATE (certificate));
       if (issuer)
         {
           g_return_val_if_fail (G_IS_TLS_CERTIFICATE_GNUTLS (issuer), STATUS_FAILURE);
+          certificate = G_TLS_CERTIFICATE_GNUTLS (issuer);
+          certificate_is_from_db = FALSE;
         }
 
       /* Search for the next certificate in chain */
@@ -141,13 +176,14 @@ build_certificate_chain (GTlsDatabaseGnutls      *self,
             return STATUS_FAILURE;
           else if (!issuer)
             return STATUS_INCOMPLETE;
+
+          /* Found a certificate in chain, use for next step */
           g_return_val_if_fail (G_IS_TLS_CERTIFICATE_GNUTLS (issuer), STATUS_FAILURE);
           g_tls_certificate_gnutls_set_issuer (certificate, G_TLS_CERTIFICATE_GNUTLS (issuer));
+          certificate = G_TLS_CERTIFICATE_GNUTLS (issuer);
+          certificate_is_from_db = TRUE;
           g_object_unref (issuer);
         }
-
-      g_assert (issuer);
-      certificate = G_TLS_CERTIFICATE_GNUTLS (issuer);
     }
 
   g_assert_not_reached ();
@@ -159,16 +195,41 @@ double_check_before_after_dates (GTlsCertificateGnutls *chain)
   GTlsCertificateFlags gtls_flags = 0;
   gnutls_x509_crt_t cert;
   time_t t, now;
+#if ENABLE(TIZEN_TV_DLOG)
+  char timebuf[256];
+#endif
 
   now = time (NULL);
   while (chain)
     {
       cert = g_tls_certificate_gnutls_get_cert (chain);
       t = gnutls_x509_crt_get_activation_time (cert);
+
+#if ENABLE(TIZEN_TV_DLOG)
+      ctime_r(&now, timebuf);
+      TIZEN_LOGI("[Certificate] TV borad time is: %s", timebuf);
+      if (t != (time_t) -1) {
+	ctime_r(&t, timebuf);
+        TIZEN_LOGI("[Certificate] CA activation time is: %s", timebuf);
+      }
+      else
+        TIZEN_LOGI("[Certificate] gnutls_x509_crt_get_activation_time ERROR");
+#endif
+
       if (t == (time_t) -1 || t > now)
         gtls_flags |= G_TLS_CERTIFICATE_NOT_ACTIVATED;
 
       t = gnutls_x509_crt_get_expiration_time (cert);
+
+#if ENABLE(TIZEN_TV_DLOG)
+      if (t != (time_t) -1) {
+	ctime_r(&t, timebuf);
+        TIZEN_LOGI("[Certificate] CA expiration time is: %s", timebuf);
+      }
+      else
+        TIZEN_LOGI("[Certificate] gnutls_x509_crt_get_expiration_time ERROR");
+#endif
+
       if (t == (time_t) -1 || t < now)
         gtls_flags |= G_TLS_CERTIFICATE_EXPIRED;
 

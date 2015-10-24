@@ -25,6 +25,7 @@
 
 #include "gtlscertificate-gnutls.h"
 #include <glib/gi18n-lib.h>
+#include "TIZEN.h"
 
 static void     g_tls_certificate_gnutls_initable_iface_init (GInitableIface  *iface);
 
@@ -310,6 +311,10 @@ g_tls_certificate_gnutls_verify (GTlsCertificate     *cert,
   gnutls_x509_crt_t *chain;
   GTlsCertificateFlags gtls_flags;
   time_t t, now;
+#if ENABLE(TIZEN_TV_DLOG)
+  char timebuf[256];
+#endif
+
   
   cert_gnutls = G_TLS_CERTIFICATE_GNUTLS (cert);
   for (num_certs = 0; cert_gnutls; cert_gnutls = cert_gnutls->priv->issuer)
@@ -349,10 +354,32 @@ g_tls_certificate_gnutls_verify (GTlsCertificate     *cert,
   for (i = 0; i < num_certs; i++)
     {
       t = gnutls_x509_crt_get_activation_time (chain[i]);
+
+#if ENABLE(TIZEN_TV_DLOG)
+      ctime_r(&now, timebuf);
+      TIZEN_LOGI("[Certificate] TV borad time is: %s", timebuf);
+      if (t != (time_t) -1) {
+	ctime_r(&t, timebuf);
+        TIZEN_LOGI("[Certificate] CA activation time is: %s", timebuf);
+      }
+      else
+        TIZEN_LOGI("[Certificate] gnutls_x509_crt_get_activation_time ERROR");
+#endif
+
       if (t == (time_t) -1 || t > now)
 	gtls_flags |= G_TLS_CERTIFICATE_NOT_ACTIVATED;
 
       t = gnutls_x509_crt_get_expiration_time (chain[i]);
+
+#if ENABLE(TIZEN_TV_DLOG)
+      if (t != (time_t) -1) {
+	ctime_r(&t, timebuf);
+        TIZEN_LOGI("[Certificate] CA expiration time is: %s", timebuf);
+      }
+      else
+        TIZEN_LOGI("[Certificate] gnutls_x509_crt_get_expiration_time ERROR");
+#endif
+
       if (t == (time_t) -1 || t < now)
 	gtls_flags |= G_TLS_CERTIFICATE_EXPIRED;
     }
@@ -371,7 +398,7 @@ g_tls_certificate_gnutls_real_copy (GTlsCertificateGnutls    *gnutls,
                                     gnutls_retr2_st          *st)
 {
   gnutls_x509_crt_t cert;
-  gnutls_datum data;
+  gnutls_datum_t data;
   size_t size = 0;
 
   gnutls_x509_crt_export (gnutls->priv->cert, GNUTLS_X509_FMT_DER,
@@ -429,8 +456,8 @@ g_tls_certificate_gnutls_initable_iface_init (GInitableIface  *iface)
 }
 
 GTlsCertificate *
-g_tls_certificate_gnutls_new (const gnutls_datum *datum,
-			      GTlsCertificate    *issuer)
+g_tls_certificate_gnutls_new (const gnutls_datum_t *datum,
+			      GTlsCertificate      *issuer)
 {
   GTlsCertificateGnutls *gnutls;
 
@@ -444,7 +471,7 @@ g_tls_certificate_gnutls_new (const gnutls_datum *datum,
 
 void
 g_tls_certificate_gnutls_set_data (GTlsCertificateGnutls *gnutls,
-                                   const gnutls_datum *datum)
+                                   const gnutls_datum_t  *datum)
 {
   g_return_if_fail (G_IS_TLS_CERTIFICATE_GNUTLS (gnutls));
   g_return_if_fail (!gnutls->priv->have_cert);
@@ -541,6 +568,9 @@ g_tls_certificate_gnutls_verify_identity (GTlsCertificateGnutls *gnutls,
   /* FIXME: check sRVName and uniformResourceIdentifier
    * subjectAltNames, if appropriate for @identity.
    */
+#if ENABLE(TIZEN_TV_DLOG)
+  TIZEN_LOGI("[Network] SSL HandShake - Bad Identity");
+#endif
 
   return G_TLS_CERTIFICATE_BAD_IDENTITY;
 }
@@ -558,4 +588,15 @@ g_tls_certificate_gnutls_set_issuer (GTlsCertificateGnutls *gnutls,
     g_object_unref (gnutls->priv->issuer);
   gnutls->priv->issuer = issuer;
   g_object_notify (G_OBJECT (gnutls), "issuer");
+}
+
+GBytes *
+g_tls_certificate_gnutls_get_bytes (GTlsCertificateGnutls *gnutls)
+{
+  GByteArray *array;
+
+  g_return_val_if_fail (G_IS_TLS_CERTIFICATE_GNUTLS (gnutls), NULL);
+
+  g_object_get (gnutls, "certificate", &array, NULL);
+  return g_byte_array_free_to_bytes (array);
 }

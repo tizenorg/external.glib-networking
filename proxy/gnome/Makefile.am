@@ -1,4 +1,4 @@
-include $(top_srcdir)/Makefile.decl
+include $(top_srcdir)/glib-networking.mk
 
 giomodule_LTLIBRARIES = libgiognomeproxy.la
 
@@ -8,7 +8,7 @@ libgiognomeproxy_la_SOURCES = 		\
 	gnome-proxy-module.c		\
 	$(NULL)
 
-INCLUDES += $(GSETTINGS_DESKTOP_SCHEMAS_CFLAGS)
+AM_CPPFLAGS += $(GSETTINGS_DESKTOP_SCHEMAS_CFLAGS)
 
 libgiognomeproxy_la_LDFLAGS = $(module_flags)
 libgiognomeproxy_la_LIBADD =		\

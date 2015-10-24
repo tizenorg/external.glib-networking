@@ -1,5 +1,5 @@
 ## Process this file with automake to produce Makefile.in
-include $(top_srcdir)/Makefile.decl
+include $(top_srcdir)/glib-networking.mk
 
 ACLOCAL_AMFLAGS = -I m4 ${ACLOCAL_FLAGS}
 
@@ -21,9 +21,8 @@ endif
 
 if HAVE_GNUTLS
 SUBDIRS += tls/gnutls
-endif
-
 SUBDIRS += tls/tests
+endif
 
 install-exec-hook:
 	if test -n "$(GIO_QUERYMODULES)" -a -z "$(DESTDIR)"; then \

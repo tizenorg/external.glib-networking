@@ -1,40 +1,82 @@
-Name:       glib-networking
-Summary:    Network extensions for GLib
-Version:    2.32.3_1.8
-Release:    1
-Group:      System/Libraries
-License:    LGPL-2.0+
-URL:        http://git.gnome.org/browse/glib-networking/
-Source0:    %{name}-%{version}.tar.gz
-
-BuildRequires:  pkgconfig(glib-2.0)
-BuildRequires:  pkgconfig(gnutls)
+%bcond_with libproxy
+Name:           glib-networking
+Version:        2.38.0
+Release:        0
+License:        LGPL-2.1+
+Summary:        Network-related GIO modules for glib
+Group:          System/Libraries
+Source:         http://download.gnome.org/sources/glib-networking/2.35/%{name}-%{version}.tar.xz
+Source99:       baselibs.conf
+Source1001:     glib-networking.manifest
+Url:            http://www.gnome.org
 BuildRequires:  intltool
+BuildRequires:  which
+BuildRequires:  libgcrypt-devel
+BuildRequires:  pkgconfig(dbus-1)
+BuildRequires:  pkgconfig(gio-2.0) >= 2.31.6
+BuildRequires:  pkgconfig(gnutls) >= 2.11.0
+BuildRequires:  pkgconfig(dlog)
+%if %{with libproxy}
+BuildRequires:  pkgconfig(libproxy-1.0)
+%endif
 
 %description
-Networking extensions for GLib
+This package contains network-related GIO modules for glib.
 
+Currently, there is only a proxy module based on libproxy.
 
+%lang_package
 
 %prep
-%setup -q -n %{name}-%{version}
+%setup -q
+cp %{SOURCE1001} .
 
 %build
+%autogen \
+    --disable-static \
+%if %{with libproxy}
+    --with-libproxy  \
+%endif
+%if "%{?tizen_profile_name}" == "tv"
+    --enable-tizen-multiple-certificate=yes \
+    --enable-tizen-tv-update-default-priority \
+    --enable-tizen-dlog \
+    --enable-tizen-performance-test-log \
+%endif
+%if "%{?tizen_profile_name}" == "tv"
+    --with-ca-certificates=/opt/share/ca-certificates/
+%else
+    --with-ca-certificates=/opt/share/ca-certificates/ca-certificate.crt
+%endif
 
-%configure --disable-static --without-ca-certificates
-make %{?jobs:-j%jobs}
+%__make %{?_smp_mflags} V=1
 
 %install
+%if "%{?tizen_profile_name}" == "tv"
 rm -rf %{buildroot}
-mkdir -p %{buildroot}/usr/share/license
-cp COPYING %{buildroot}/usr/share/license/%{name}
-
+mkdir -p %{buildroot}/opt/share/ca-certificates/
+cp wss.pem %{buildroot}/opt/share/ca-certificates/
+%endif
 %make_install
+%find_lang %{name}
 
-%find_lang glib-networking
+%post
+%glib2_gio_module_post
 
-%files -f glib-networking.lang
-%defattr(-,root,root,-)
+%postun
+%glib2_gio_module_postun
+
+%files
+%manifest %{name}.manifest
+%defattr(-, root, root)
+%doc COPYING
 %{_libdir}/gio/modules/libgiognutls.so
-/usr/share/license/%{name}
-%manifest glib-networking.manifest
+%if "%{?tizen_profile_name}" == "tv"
+/opt/share/ca-certificates/wss.pem
+%endif
+
+%if %{with libproxy}
+%{_libdir}/gio/modules/libgiolibproxy.so
+%{_libexecdir}/glib-pacrunner
+%{_datadir}/dbus-1/services/org.gtk.GLib.PACRunner.service
+%endif

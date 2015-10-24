@@ -29,7 +29,6 @@
 #include "gtlsbackend-gnutls.h"
 #include "gtlscertificate-gnutls.h"
 #include <glib/gi18n-lib.h>
-#include <TIZEN.h>
 
 enum
 {
@@ -277,11 +276,7 @@ g_tls_client_connection_gnutls_begin_handshake (GTlsConnectionGnutls *conn)
   GTlsClientConnectionGnutls *gnutls = G_TLS_CLIENT_CONNECTION_GNUTLS (conn);
 
   /* Try to get a cached session */
-#if ENABLE(TIZEN_NPN)
-  if (gnutls->priv->session_id && !g_tls_connection_gnutls_is_npn_set (conn))
-#else
   if (gnutls->priv->session_id)
-#endif
     {
       GBytes *session_data;
 
@@ -298,85 +293,15 @@ g_tls_client_connection_gnutls_begin_handshake (GTlsConnectionGnutls *conn)
   gnutls->priv->cert_requested = FALSE;
 }
 
-static gboolean
-g_tls_client_connection_gnutls_verify_peer (GTlsConnectionGnutls  *conn_gnutls,
-					    GTlsCertificate       *peer_certificate,
-					    GTlsCertificateFlags  *errors)
-{
-  GTlsClientConnectionGnutls *gnutls = G_TLS_CLIENT_CONNECTION_GNUTLS (conn_gnutls);
-  GTlsDatabase *database;
-  gboolean accepted;
-  GError *error = NULL;
-
-  database = g_tls_connection_get_database (G_TLS_CONNECTION (conn_gnutls));
-  if (database == NULL)
-    {
-      *errors |= G_TLS_CERTIFICATE_UNKNOWN_CA;
-      *errors |= g_tls_certificate_verify (peer_certificate, gnutls->priv->server_identity, NULL);
-    }
-  else
-    {
-      *errors |= g_tls_database_verify_chain (database, peer_certificate,
-                                              G_TLS_DATABASE_PURPOSE_AUTHENTICATE_SERVER,
-                                              gnutls->priv->server_identity,
-                                              g_tls_connection_get_interaction (G_TLS_CONNECTION (gnutls)),
-                                              G_TLS_DATABASE_VERIFY_NONE,
-                                              NULL, &error);
-      if (error)
-        {
-          g_warning ("failure verifying certificate chain: %s",
-                     error->message);
-          g_clear_error (&error);
-        }
-    }
-
-  if (*errors & gnutls->priv->validation_flags)
-    accepted = g_tls_connection_emit_accept_certificate (G_TLS_CONNECTION (gnutls), peer_certificate, *errors);
-  else
-    accepted = TRUE;
-
-  return accepted;
-}
-
-#if ENABLE(TIZEN_NPN)
-/* Following two functions MUST be declared.
- * Because glib2.0 already has following functions named set_next_protocols/get_next_protocol. */
-/*
-  available protocols as it is on Dec. 2012:
-    http/1.1
-    spdy/2
-    spdy/3
-*/
-#define __PROTOCOL_NAME_MAXLEN    8       /* http/1.1 */
-
-static gboolean
-_is_spdy (GTlsConnectionGnutls  *conn)
-{
-  int gnutls_ret;
-  size_t size;
-  gchar buf[__PROTOCOL_NAME_MAXLEN];
-
-  size = __PROTOCOL_NAME_MAXLEN;
-  gnutls_ret = gnutls_get_next_protocol (g_tls_connection_gnutls_get_session (conn), buf, &size, NULL);
-  if (!gnutls_ret)
-  {
-	  if (!strncmp (buf, "spdy", 4))
-		  return TRUE;
-  }
-
-  return FALSE;
-}
-#endif
-
 static void
 g_tls_client_connection_gnutls_finish_handshake (GTlsConnectionGnutls  *conn,
-						 gboolean               success,
 						 GError               **inout_error)
 {
   GTlsClientConnectionGnutls *gnutls = G_TLS_CLIENT_CONNECTION_GNUTLS (conn);
 
-  if (inout_error &&
-      g_error_matches (*inout_error, G_TLS_ERROR, G_TLS_ERROR_NOT_TLS) &&
+  g_assert (inout_error != NULL);
+
+  if (g_error_matches (*inout_error, G_TLS_ERROR, G_TLS_ERROR_NOT_TLS) &&
       gnutls->priv->cert_requested)
     {
       g_clear_error (inout_error);
@@ -384,15 +309,11 @@ g_tls_client_connection_gnutls_finish_handshake (GTlsConnectionGnutls  *conn,
 			   _("Server required TLS certificate"));
     }
 
-#if ENABLE(TIZEN_NPN)
-  if (gnutls->priv->session_id && !_is_spdy (conn))
-#else
   if (gnutls->priv->session_id)
-#endif
     {
-      gnutls_datum session_datum;
+      gnutls_datum_t session_datum;
 
-      if (success &&
+      if (!*inout_error &&
 	  gnutls_session_get_data2 (g_tls_connection_gnutls_get_session (conn),
 				    &session_datum) == 0)
 	{
@@ -423,7 +344,6 @@ g_tls_client_connection_gnutls_class_init (GTlsClientConnectionGnutlsClass *klas
 
   connection_gnutls_class->failed           = g_tls_client_connection_gnutls_failed;
   connection_gnutls_class->begin_handshake  = g_tls_client_connection_gnutls_begin_handshake;
-  connection_gnutls_class->verify_peer      = g_tls_client_connection_gnutls_verify_peer;
   connection_gnutls_class->finish_handshake = g_tls_client_connection_gnutls_finish_handshake;
 
   g_object_class_override_property (gobject_class, PROP_VALIDATION_FLAGS, "validation-flags");

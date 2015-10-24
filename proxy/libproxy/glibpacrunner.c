@@ -69,7 +69,8 @@ handle_method_call (GDBusConnection       *connection,
 
   g_variant_get (parameters, "(&s&s)", &pac_url, &lookup_url);
 
-  if (!g_ascii_strncasecmp (pac_url, "http", 4))
+  if (!g_ascii_strncasecmp (pac_url, "http", 4) ||
+      !g_ascii_strncasecmp (pac_url, "file:", 5))
     {
       gchar *libproxy_url = g_strdup_printf ("pac+%s", pac_url);
       g_setenv ("http_proxy", libproxy_url, TRUE);
@@ -128,8 +129,6 @@ int
 main (int argc, char *argv[])
 {
   int owner_id;
-
-  g_type_init ();
 
   /* Unset variables that would make libproxy try to use gconf or ksettings */
   g_unsetenv ("GNOME_DESKTOP_SESSION_ID");

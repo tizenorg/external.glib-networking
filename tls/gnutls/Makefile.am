@@ -1,4 +1,4 @@
-include $(top_srcdir)/Makefile.decl
+include $(top_srcdir)/glib-networking.mk
 
 giomodule_LTLIBRARIES = libgiognutls.la
 
@@ -47,9 +47,9 @@ libgiognutls_la_SOURCES = 		\
 	$(P11_SRCS) 			\
 	$(NULL)
 
-INCLUDES +=				\
+AM_CPPFLAGS +=				\
 	$(P11_CFLAGS)			\
-	$(LIBGNUTLS_CFLAGS)		\
+	$(GNUTLS_CFLAGS)		\
 	$(NULL)
 
 libgiognutls_la_LDFLAGS = $(module_flags)

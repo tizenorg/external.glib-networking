@@ -36,11 +36,7 @@ struct _GTlsConnectionGnutlsClass
   void     (*failed)           (GTlsConnectionGnutls  *gnutls);
 
   void     (*begin_handshake)  (GTlsConnectionGnutls  *gnutls);
-  gboolean (*verify_peer)      (GTlsConnectionGnutls  *gnutls,
-				GTlsCertificate       *peer_certificate,
-				GTlsCertificateFlags  *errors);
   void     (*finish_handshake) (GTlsConnectionGnutls  *gnutls,
-				gboolean               success,
 				GError               **inout_error);
 };
 
@@ -52,9 +48,9 @@ struct _GTlsConnectionGnutls
 
 GType g_tls_connection_gnutls_get_type (void) G_GNUC_CONST;
 
-gnutls_certificate_credentials g_tls_connection_gnutls_get_credentials (GTlsConnectionGnutls *connection);
-gnutls_session                 g_tls_connection_gnutls_get_session     (GTlsConnectionGnutls *connection);
-void                           g_tls_connection_gnutls_get_certificate (GTlsConnectionGnutls *gnutls,
+gnutls_certificate_credentials_t g_tls_connection_gnutls_get_credentials (GTlsConnectionGnutls *connection);
+gnutls_session_t                 g_tls_connection_gnutls_get_session     (GTlsConnectionGnutls *connection);
+void                             g_tls_connection_gnutls_get_certificate (GTlsConnectionGnutls *gnutls,
                                                                         gnutls_retr2_st      *st);
 
 gssize   g_tls_connection_gnutls_read          (GTlsConnectionGnutls  *gnutls,
@@ -75,10 +71,6 @@ gboolean g_tls_connection_gnutls_check         (GTlsConnectionGnutls  *gnutls,
 GSource *g_tls_connection_gnutls_create_source (GTlsConnectionGnutls  *gnutls,
 						GIOCondition           condition,
 						GCancellable          *cancellable);
-
-//#if ENABLE(TIZEN_NPN)
-gboolean g_tls_connection_gnutls_is_npn_set         (GTlsConnectionGnutls  *gnutls);
-//#endif
 
 G_END_DECLS
 

@@ -1,7 +1,7 @@
 AC_PREREQ(2.65)
 AC_CONFIG_MACRO_DIR([m4])
 
-AC_INIT([glib-networking],[2.32.3],[http://bugzilla.gnome.org/enter_bug.cgi?product=glib&component=network])
+AC_INIT([glib-networking],[2.38.0],[http://bugzilla.gnome.org/enter_bug.cgi?product=glib&component=network])
 
 AC_CONFIG_SRCDIR([proxy/libproxy/glibproxyresolver.h])
 AC_CONFIG_HEADERS([config.h])
@@ -33,7 +33,8 @@ AM_GLIB_GNU_GETTEXT
 dnl *****************************
 dnl *** Check GLib GIO        ***
 dnl *****************************
-AM_PATH_GLIB_2_0(2.31.6,,AC_MSG_ERROR(GLIB not found),gio)
+AM_PATH_GLIB_2_0(2.38.0,,AC_MSG_ERROR(GLIB not found),gio)
+GLIB_CFLAGS="$GLIB_CFLAGS -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_36"
 
 GIO_MODULE_DIR=$($PKG_CONFIG --variable giomoduledir gio-2.0)
 AS_IF([test "x$GIO_MODULE_DIR" = "x"],
@@ -42,6 +43,8 @@ AC_SUBST(GIO_MODULE_DIR)
 
 AC_PATH_PROG(GIO_QUERYMODULES, gio-querymodules)
 AC_SUBST(GIO_QUERYMODULES)
+
+GLIB_TESTS
 
 dnl *****************************
 dnl *** Checks for LibProxy   ***
@@ -81,8 +84,7 @@ dnl *****************************
 dnl *** Checks for GNUTLS     ***
 dnl *****************************
 
-GNUTLS_MIN_REQUIRED=2.11.0
-GNUTLS_MIN_PKCS11=2.12.8
+GNUTLS_MIN_REQUIRED=2.12.8
 
 AC_ARG_WITH(gnutls,
     [AC_HELP_STRING([--with-gnutls],
@@ -140,7 +142,7 @@ AC_ARG_WITH(pkcs11,
 	                [with_pkcs11=check])
 if test "x$with_pkcs11" != "xno"; then
 	PKG_CHECK_MODULES(PKCS11,
-	                  [p11-kit-1 >= $P11_KIT_REQUIRED gnutls >= $GNUTLS_MIN_PKCS11],
+	                  [p11-kit-1 >= $P11_KIT_REQUIRED],
 	                  [with_pkcs11=yes
 	                   pkcs11_support=p11-kit
 	                   tls_support="${tls_support}gnutls-pkcs11 "
@@ -154,6 +156,70 @@ fi
 AM_CONDITIONAL(HAVE_PKCS11, [test "x$with_pkcs11" = "xyes"])
 AC_SUBST(PKCS11_CFLAGS)
 AC_SUBST(PKCS11_LIBS)
+
+dnl *************************
+dnl *** Tizen multiple certificate support  ***
+dnl *************************
+
+AC_ARG_ENABLE(tizen-multiple-certificate,
+	AS_HELP_STRING([--enable-tizen-multiple-certificate], [Enable Tizen multiple certificate support ]),        ,
+	enable_tizen_multiple_certificate=no)
+
+AC_MSG_CHECKING([for Tizen multiple certificate])
+if test $enable_tizen_multiple_certificate != no;then
+        AC_DEFINE(ENABLE_TIZEN_TV_MULTIPLE_CERTIFICATE, 1, [Add new feature, support to install more than one file, multiple file path will be seperated by colon symbol])
+fi
+AC_MSG_RESULT($enable_tizen_multiple_certificate)
+
+AM_CONDITIONAL(TIZEN_TV_MULTIPLE_CERTIFICATE, [test $enable_tizen_multiple_certificate = yes])
+
+dnl ***************************
+dnl *** Tizen dlog support  ***
+dnl ***************************
+
+AC_ARG_ENABLE(tizen-dlog,
+        AS_HELP_STRING([--enable-tizen-dlog], [Enable Tizen dlog support ]),        ,
+        enable_tizen_dlog=no)
+
+AC_MSG_CHECKING([for Tizen dlog])
+if test $enable_tizen_dlog != no;then
+        AC_DEFINE(ENABLE_TIZEN_TV_DLOG, 1, [Add new feature, support to add tizen dlog in glib-networking])
+fi
+AC_MSG_RESULT($enable_tizen_dlog)
+
+AM_CONDITIONAL(TIZEN_TV_DLOG, [test $enable_tizen_dlog = yes])
+
+dnl *****************************************************
+dnl *** Tizen update gnutls default priority support  ***
+dnl *****************************************************
+
+AC_ARG_ENABLE(tizen-tv-update-default-priority,
+        AS_HELP_STRING([--enable-tizen-tv-update-default-priority], [Enable Tizen update gnults default priority support ]),        ,
+        enable_tizen_tv_update_default_priority=no)
+
+AC_MSG_CHECKING([for Tizen tv update default priority])
+if test $enable_tizen_tv_update_default_priority != no;then
+        AC_DEFINE(ENABLE_TIZEN_TV_UPDATE_DEFAULT_PRIORITY, 1, [Add new feature, support to update gnutls default priority in glib-networking])
+fi
+AC_MSG_RESULT($enable_tizen_tv_update_default_priority)
+
+AM_CONDITIONAL(TIZEN_TV_UPDATE_DEFAULT_PRIORITY, [test $enable_tizen_tv_update_default_priority = yes])
+
+dnl *******************************
+dnl *** Tizen performance test  ***
+dnl *******************************
+
+AC_ARG_ENABLE(tizen-performance-test-log,
+        AS_HELP_STRING([--enable-tizen-performance-test-log], [Enable Tizen performance test log]),        ,
+	enable_tizen_performance_test_log=no)
+
+AC_MSG_CHECKING([for Tizen performance test log])
+if test $enable_tizen_performance_test_log != no;then
+	AC_DEFINE(ENABLE_TIZEN_PERFORMANCE_TEST_LOG, 1, [Add performance test log])
+fi
+AC_MSG_RESULT($enable_tizen_performance_test_log)
+
+AM_CONDITIONAL(TIZEN_PERFORMANCE_TEST_LOG, [test $enable_tizen_performance_test_log = yes])
 
 dnl ************************************
 dnl *** Enable lcov coverage reports ***

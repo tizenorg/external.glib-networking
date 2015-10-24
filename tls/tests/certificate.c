@@ -27,9 +27,14 @@
 #define TEST_FILE(name) (SRCDIR "/files/" name)
 
 typedef struct {
-  gchar *pem;
-  gsize pem_length;
-  GByteArray *der;
+  GTlsBackend *backend;
+  GType cert_gtype;
+  gchar *cert_pem;
+  gsize cert_pem_length;
+  GByteArray *cert_der;
+  gchar *key_pem;
+  gsize key_pem_length;
+  GByteArray *key_der;
 } TestCertificate;
 
 static void
@@ -39,39 +44,59 @@ setup_certificate (TestCertificate *test, gconstpointer data)
   gchar *contents;
   gsize length;
 
-  g_file_get_contents (TEST_FILE ("server.pem"),
-		       &test->pem, &test->pem_length, &error);
+  test->backend = g_tls_backend_get_default ();
+  test->cert_gtype = g_tls_backend_get_certificate_type (test->backend);
+
+  g_file_get_contents (TEST_FILE ("server.pem"), &test->cert_pem,
+                       &test->cert_pem_length, &error);
   g_assert_no_error (error);
 
   g_file_get_contents (TEST_FILE ("server.der"),
 		       &contents, &length, &error);
   g_assert_no_error (error);
 
-  test->der = g_byte_array_new ();
-  g_byte_array_append (test->der, (guint8 *)contents, length);
+  test->cert_der = g_byte_array_new ();
+  g_byte_array_append (test->cert_der, (guint8 *)contents, length);
+  g_free (contents);
+
+  g_file_get_contents (TEST_FILE ("server-key.pem"), &test->key_pem,
+                       &test->key_pem_length, &error);
+  g_assert_no_error (error);
+
+  g_file_get_contents (TEST_FILE ("server-key.der"),
+                       &contents, &length, &error);
+  g_assert_no_error (error);
+
+  test->key_der = g_byte_array_new ();
+  g_byte_array_append (test->key_der, (guint8 *)contents, length);
   g_free (contents);
 }
 
 static void
-teardown_certificate (TestCertificate *test, gconstpointer data)
+teardown_certificate (TestCertificate *test,
+                      gconstpointer data)
 {
-  g_free (test->pem);
-  g_byte_array_free (test->der, TRUE);
+  g_free (test->cert_pem);
+  g_byte_array_free (test->cert_der, TRUE);
+
+  g_free (test->key_pem);
+  g_byte_array_free (test->key_der, TRUE);
 }
 
 static void
-test_create_destroy_certificate_pem (TestCertificate *test, gconstpointer data)
+test_create_pem (TestCertificate *test,
+                 gconstpointer data)
 {
   GTlsCertificate *cert;
   gchar *pem = NULL;
   GError *error = NULL;
 
-  cert = g_tls_certificate_new_from_pem (test->pem, test->pem_length, &error);
+  cert = g_tls_certificate_new_from_pem (test->cert_pem, test->cert_pem_length, &error);
   g_assert_no_error (error);
   g_assert (G_IS_TLS_CERTIFICATE (cert));
 
   g_object_get (cert, "certificate-pem", &pem, NULL);
-  g_assert_cmpstr (pem, ==, test->pem);
+  g_assert_cmpstr (pem, ==, test->cert_pem);
   g_free (pem);
 
   g_object_add_weak_pointer (G_OBJECT (cert), (gpointer *)&cert);
@@ -80,26 +105,63 @@ test_create_destroy_certificate_pem (TestCertificate *test, gconstpointer data)
 }
 
 static void
-test_create_destroy_certificate_der (TestCertificate *test, gconstpointer data)
+test_create_with_key_pem (TestCertificate *test,
+                          gconstpointer data)
+{
+  GTlsCertificate *cert;
+  GError *error = NULL;
+
+  cert = g_initable_new (test->cert_gtype, NULL, &error,
+                         "certificate-pem", test->cert_pem,
+                         "private-key-pem", test->key_pem,
+                         NULL);
+  g_assert_no_error (error);
+  g_assert (G_IS_TLS_CERTIFICATE (cert));
+
+  g_object_add_weak_pointer (G_OBJECT (cert), (gpointer *)&cert);
+  g_object_unref (cert);
+  g_assert (cert == NULL);
+}
+
+static void
+test_create_der (TestCertificate *test,
+                 gconstpointer data)
 {
   GTlsCertificate *cert;
   GByteArray *der = NULL;
   GError *error = NULL;
-  GTlsBackend *backend;
 
-  backend = g_tls_backend_get_default ();
-  cert = g_initable_new (g_tls_backend_get_certificate_type (backend),
-                         NULL, &error,
-                         "certificate", test->der,
+  cert = g_initable_new (test->cert_gtype, NULL, &error,
+                         "certificate", test->cert_der,
                          NULL);
   g_assert_no_error (error);
   g_assert (G_IS_TLS_CERTIFICATE (cert));
 
   g_object_get (cert, "certificate", &der, NULL);
   g_assert (der);
-  g_assert_cmpuint (der->len, ==, test->der->len);
-  g_assert (memcmp (der->data, test->der->data, der->len) == 0);
+  g_assert_cmpuint (der->len, ==, test->cert_der->len);
+  g_assert (memcmp (der->data, test->cert_der->data, der->len) == 0);
+
   g_byte_array_unref (der);
+
+  g_object_add_weak_pointer (G_OBJECT (cert), (gpointer *)&cert);
+  g_object_unref (cert);
+  g_assert (cert == NULL);
+}
+
+static void
+test_create_with_key_der (TestCertificate *test,
+                          gconstpointer data)
+{
+  GTlsCertificate *cert;
+  GError *error = NULL;
+
+  cert = g_initable_new (test->cert_gtype, NULL, &error,
+                         "certificate", test->cert_der,
+                         "private-key", test->key_der,
+                         NULL);
+  g_assert_no_error (error);
+  g_assert (G_IS_TLS_CERTIFICATE (cert));
 
   g_object_add_weak_pointer (G_OBJECT (cert), (gpointer *)&cert);
   g_object_unref (cert);
@@ -112,16 +174,13 @@ test_create_certificate_with_issuer (TestCertificate   *test,
 {
   GTlsCertificate *cert, *issuer, *check;
   GError *error = NULL;
-  GTlsBackend *backend;
 
   issuer = g_tls_certificate_new_from_file (TEST_FILE ("ca.pem"), &error);
   g_assert_no_error (error);
   g_assert (G_IS_TLS_CERTIFICATE (issuer));
 
-  backend = g_tls_backend_get_default ();
-  cert = g_initable_new (g_tls_backend_get_certificate_type (backend),
-                         NULL, &error,
-                         "certificate-pem", test->pem,
+  cert = g_initable_new (test->cert_gtype, NULL, &error,
+                         "certificate-pem", test->cert_pem,
                          "issuer", issuer,
                          NULL);
   g_assert_no_error (error);
@@ -321,262 +380,52 @@ test_verify_certificate_bad_combo (TestVerify      *test,
 }
 
 static void
-test_verify_database_good (TestVerify      *test,
-                           gconstpointer    data)
+test_certificate_is_same (void)
 {
-  GTlsCertificateFlags errors;
+  GTlsCertificate *one;
+  GTlsCertificate *two;
+  GTlsCertificate *three;
   GError *error = NULL;
 
-  errors = g_tls_database_verify_chain (test->database, test->cert,
-                                        G_TLS_DATABASE_PURPOSE_AUTHENTICATE_SERVER,
-                                        test->identity, NULL, 0, NULL, &error);
+  one = g_tls_certificate_new_from_file (TEST_FILE ("client.pem"), &error);
   g_assert_no_error (error);
-  g_assert_cmpuint (errors, ==, 0);
 
-  errors = g_tls_database_verify_chain (test->database, test->cert,
-                                        G_TLS_DATABASE_PURPOSE_AUTHENTICATE_SERVER,
-                                        NULL, NULL, 0, NULL, &error);
-  g_assert_cmpuint (errors, ==, 0);
-}
-
-static void
-test_verify_database_bad_identity (TestVerify      *test,
-                                   gconstpointer    data)
-{
-  GSocketConnectable *identity;
-  GTlsCertificateFlags errors;
-  GError *error = NULL;
-
-  identity = g_network_address_new ("other.example.com", 80);
-
-  errors = g_tls_database_verify_chain (test->database, test->cert,
-                                        G_TLS_DATABASE_PURPOSE_AUTHENTICATE_SERVER,
-                                        identity, NULL, 0, NULL, &error);
+  two = g_tls_certificate_new_from_file (TEST_FILE ("client-and-key.pem"), &error);
   g_assert_no_error (error);
-  g_assert_cmpuint (errors, ==, G_TLS_CERTIFICATE_BAD_IDENTITY);
 
-  g_object_unref (identity);
-}
-
-static void
-test_verify_database_bad_ca (TestVerify      *test,
-                             gconstpointer    data)
-{
-  GTlsCertificateFlags errors;
-  GTlsCertificate *cert;
-  GError *error = NULL;
-
-  /* Use another certificate which isn't in our CA list */
-  cert = g_tls_certificate_new_from_file (TEST_FILE ("server-self.pem"), &error);
+  three = g_tls_certificate_new_from_file (TEST_FILE ("server.pem"), &error);
   g_assert_no_error (error);
-  g_assert (G_IS_TLS_CERTIFICATE (cert));
 
-  errors = g_tls_database_verify_chain (test->database, cert,
-                                        G_TLS_DATABASE_PURPOSE_AUTHENTICATE_SERVER,
-                                        test->identity, NULL, 0, NULL, &error);
-  g_assert_no_error (error);
-  g_assert_cmpuint (errors, ==, G_TLS_CERTIFICATE_UNKNOWN_CA);
+  g_assert (g_tls_certificate_is_same (one, two) == TRUE);
+  g_assert (g_tls_certificate_is_same (two, one) == TRUE);
+  g_assert (g_tls_certificate_is_same (three, one) == FALSE);
+  g_assert (g_tls_certificate_is_same (one, three) == FALSE);
+  g_assert (g_tls_certificate_is_same (two, three) == FALSE);
+  g_assert (g_tls_certificate_is_same (three, two) == FALSE);
 
-  g_object_unref (cert);
-}
-
-static void
-test_verify_database_bad_before (TestVerify      *test,
-                                 gconstpointer    data)
-{
-  GTlsCertificateFlags errors;
-  GTlsCertificate *cert;
-  GError *error = NULL;
-
-  /* This is a certificate in the future */
-  cert = g_tls_certificate_new_from_file (TEST_FILE ("client-future.pem"), &error);
-  g_assert_no_error (error);
-  g_assert (G_IS_TLS_CERTIFICATE (cert));
-
-  errors = g_tls_database_verify_chain (test->database, cert,
-                                        G_TLS_DATABASE_PURPOSE_AUTHENTICATE_SERVER,
-                                        NULL, NULL, 0, NULL, &error);
-  g_assert_no_error (error);
-  g_assert_cmpuint (errors, ==, G_TLS_CERTIFICATE_NOT_ACTIVATED);
-
-  g_object_unref (cert);
-}
-
-static void
-test_verify_database_bad_expired (TestVerify      *test,
-                                  gconstpointer    data)
-{
-  GTlsCertificateFlags errors;
-  GTlsCertificate *cert;
-  GError *error = NULL;
-
-  /* This is a certificate in the future */
-  cert = g_tls_certificate_new_from_file (TEST_FILE ("client-past.pem"), &error);
-  g_assert_no_error (error);
-  g_assert (G_IS_TLS_CERTIFICATE (cert));
-
-  errors = g_tls_database_verify_chain (test->database, cert,
-                                        G_TLS_DATABASE_PURPOSE_AUTHENTICATE_SERVER,
-                                        NULL, NULL, 0, NULL, &error);
-  g_assert_no_error (error);
-  g_assert_cmpuint (errors, ==, G_TLS_CERTIFICATE_EXPIRED);
-
-  g_object_unref (cert);
-}
-
-static void
-test_verify_database_bad_combo (TestVerify      *test,
-                                gconstpointer    data)
-{
-  GTlsCertificate *cert;
-  GSocketConnectable *identity;
-  GTlsCertificateFlags errors;
-  GError *error = NULL;
-
-  cert = g_tls_certificate_new_from_file (TEST_FILE ("server-self.pem"), &error);
-  g_assert_no_error (error);
-  g_assert (G_IS_TLS_CERTIFICATE (cert));
-
-  /*
-   * - Use is self signed
-   * - Use wrong identity.
-   */
-
-  identity = g_network_address_new ("other.example.com", 80);
-
-  errors = g_tls_database_verify_chain (test->database, cert,
-                                        G_TLS_DATABASE_PURPOSE_AUTHENTICATE_SERVER,
-                                        identity, NULL, 0, NULL, &error);
-  g_assert_no_error (error);
-  g_assert_cmpuint (errors, ==, G_TLS_CERTIFICATE_UNKNOWN_CA |
-                    G_TLS_CERTIFICATE_BAD_IDENTITY);
-
-  g_object_unref (cert);
-  g_object_unref (identity);
-}
-
-/* -----------------------------------------------------------------------------
- * FILE DATABASE
- */
-
-typedef struct {
-  GTlsDatabase *database;
-  const gchar *path;
-} TestFileDatabase;
-
-static void
-setup_file_database (TestFileDatabase *test,
-                     gconstpointer     data)
-{
-  GError *error = NULL;
-
-  test->path = TEST_FILE ("ca-roots.pem");
-  test->database = g_tls_file_database_new (test->path, &error);
-  g_assert_no_error (error);
-  g_assert (G_IS_TLS_DATABASE (test->database));
-}
-
-static void
-teardown_file_database (TestFileDatabase *test,
-                        gconstpointer     data)
-{
-  g_assert (G_IS_TLS_DATABASE (test->database));
-  g_object_add_weak_pointer (G_OBJECT (test->database),
-			     (gpointer *)&test->database);
-  g_object_unref (test->database);
-  g_assert (test->database == NULL);
-}
-
-static void
-test_file_database_handle (TestFileDatabase *test,
-                           gconstpointer     unused)
-{
-  GTlsCertificate *certificate;
-  GTlsCertificate *check;
-  GError *error = NULL;
-  gchar *handle;
-
-  /*
-   * ca.pem is in the ca-roots.pem that the test->database represents.
-   * So it should be able to create a handle for it and treat it as if it
-   * is 'in' the database.
-   */
-
-  certificate = g_tls_certificate_new_from_file (TEST_FILE ("ca.pem"), &error);
-  g_assert_no_error (error);
-  g_assert (G_IS_TLS_CERTIFICATE (certificate));
-
-  handle = g_tls_database_create_certificate_handle (test->database, certificate);
-  g_assert (handle != NULL);
-  g_assert (g_str_has_prefix (handle, "file:///"));
-
-  check = g_tls_database_lookup_certificate_for_handle (test->database, handle,
-                                                        NULL, G_TLS_DATABASE_LOOKUP_NONE,
-                                                        NULL, &error);
-  g_assert_no_error (error);
-  g_assert (G_IS_TLS_CERTIFICATE (check));
-
-  g_free (handle);
-  g_object_unref (check);
-  g_object_unref (certificate);
-}
-
-static void
-test_file_database_handle_invalid (TestFileDatabase *test,
-                                   gconstpointer     unused)
-{
-  GTlsCertificate *certificate;
-  GError *error = NULL;
-
-  certificate = g_tls_database_lookup_certificate_for_handle (test->database, "blah:blah",
-                                                              NULL, G_TLS_DATABASE_LOOKUP_NONE,
-                                                              NULL, &error);
-  g_assert_no_error (error);
-  g_assert (certificate == NULL);
-}
-
-/* -----------------------------------------------------------------------------
- * BACKEND
- */
-
-static void
-test_default_database_is_singleton (void)
-{
-  GTlsBackend *backend;
-  GTlsDatabase *database;
-  GTlsDatabase *check;
-
-  backend = g_tls_backend_get_default ();
-  g_assert (G_IS_TLS_BACKEND (backend));
-
-  database = g_tls_backend_get_default_database (backend);
-  g_assert (G_IS_TLS_DATABASE (database));
-
-  check = g_tls_backend_get_default_database (backend);
-  g_assert (database == check);
-
-  g_object_unref (database);
-  g_object_unref (check);
+  g_object_unref (one);
+  g_object_unref (two);
+  g_object_unref (three);
 }
 
 int
 main (int   argc,
       char *argv[])
 {
-  g_type_init ();
   g_test_init (&argc, &argv, NULL);
 
   g_setenv ("GSETTINGS_BACKEND", "memory", TRUE);
   g_setenv ("GIO_EXTRA_MODULES", TOP_BUILDDIR "/tls/gnutls/.libs", TRUE);
   g_setenv ("GIO_USE_TLS", "gnutls", TRUE);
 
-  g_test_add_func ("/tls/backend/default-database-is-singleton",
-                   test_default_database_is_singleton);
-
-  g_test_add ("/tls/certificate/create-destroy-pem", TestCertificate, NULL,
-              setup_certificate, test_create_destroy_certificate_pem, teardown_certificate);
-  g_test_add ("/tls/certificate/create-destroy-der", TestCertificate, NULL,
-              setup_certificate, test_create_destroy_certificate_der, teardown_certificate);
+  g_test_add ("/tls/certificate/create-pem", TestCertificate, NULL,
+              setup_certificate, test_create_pem, teardown_certificate);
+  g_test_add ("/tls/certificate/create-der", TestCertificate, NULL,
+              setup_certificate, test_create_der, teardown_certificate);
+  g_test_add ("/tls/certificate/create-with-key-pem", TestCertificate, NULL,
+              setup_certificate, test_create_with_key_pem, teardown_certificate);
+  g_test_add ("/tls/certificate/create-with-key-der", TestCertificate, NULL,
+              setup_certificate, test_create_with_key_der, teardown_certificate);
   g_test_add ("/tls/certificate/create-with-issuer", TestCertificate, NULL,
               setup_certificate, test_create_certificate_with_issuer, teardown_certificate);
 
@@ -592,23 +441,8 @@ main (int   argc,
               setup_verify, test_verify_certificate_bad_expired, teardown_verify);
   g_test_add ("/tls/certificate/verify-bad-combo", TestVerify, NULL,
               setup_verify, test_verify_certificate_bad_combo, teardown_verify);
-  g_test_add ("/tls/database/verify-good", TestVerify, NULL,
-              setup_verify, test_verify_database_good, teardown_verify);
-  g_test_add ("/tls/database/verify-bad-identity", TestVerify, NULL,
-              setup_verify, test_verify_database_bad_identity, teardown_verify);
-  g_test_add ("/tls/database/verify-bad-ca", TestVerify, NULL,
-              setup_verify, test_verify_database_bad_ca, teardown_verify);
-  g_test_add ("/tls/database/verify-bad-before", TestVerify, NULL,
-              setup_verify, test_verify_database_bad_before, teardown_verify);
-  g_test_add ("/tls/database/verify-bad-expired", TestVerify, NULL,
-              setup_verify, test_verify_database_bad_expired, teardown_verify);
-  g_test_add ("/tls/database/verify-bad-combo", TestVerify, NULL,
-              setup_verify, test_verify_database_bad_combo, teardown_verify);
 
-  g_test_add ("/tls/file-database/test-handle", TestFileDatabase, NULL,
-              setup_file_database, test_file_database_handle, teardown_file_database);
-  g_test_add ("/tls/file-database/test-handle-invalid", TestFileDatabase, NULL,
-              setup_file_database, test_file_database_handle_invalid, teardown_file_database);
+  g_test_add_func ("/tls/certificate/is-same", test_certificate_is_same);
 
   return g_test_run();
 }

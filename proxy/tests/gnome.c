@@ -20,6 +20,8 @@
 #include <gio/gio.h>
 #include <gdesktop-enums.h>
 
+#include "common.c"
+
 #define GNOME_PROXY_SETTINGS_SCHEMA       "org.gnome.system.proxy"
 #define GNOME_PROXY_MODE_KEY              "mode"
 #define GNOME_PROXY_AUTOCONFIG_URL_KEY    "autoconfig-url"
@@ -45,78 +47,95 @@
 #define GNOME_PROXY_SOCKS_HOST_KEY        "host"
 #define GNOME_PROXY_SOCKS_PORT_KEY        "port"
 
-static const char *ignore_hosts[] = {
-  ".bbb.xx",
-  "*.ccc.xx",
-  "ddd.xx",
-  "*.eee.xx:8000",
-  "127.0.0.0/24",
-  "10.0.0.1:8000",
-  "::1",
-  "fe80::/10"
-};
-static const int n_ignore_hosts = G_N_ELEMENTS (ignore_hosts);
+static void
+reset_proxy_settings (gpointer      fixture,
+		      gconstpointer user_data)
+{
+  GSettings *settings, *child;
 
-static const struct {
-  const char *uri;
-  const char *proxy;
-} ignore_tests[] = {
-  { "http://aaa.xx/",          	 "http://localhost:8080" },
-  { "http://aaa.xx:8000/",     	 "http://localhost:8080" },
-  { "http://www.aaa.xx/",      	 "http://localhost:8080" },
-  { "http://www.aaa.xx:8000/", 	 "http://localhost:8080" },
-  { "https://aaa.xx/",         	 "http://localhost:8080" },
-  { "http://bbb.xx/",          	 "direct://" },
-  { "http://www.bbb.xx/",      	 "direct://" },
-  { "http://bbb.xx:8000/",     	 "direct://" },
-  { "http://www.bbb.xx:8000/", 	 "direct://" },
-  { "https://bbb.xx/",         	 "direct://" },
-  { "http://nobbb.xx/",          "http://localhost:8080" },
-  { "http://www.nobbb.xx/",      "http://localhost:8080" },
-  { "http://nobbb.xx:8000/",     "http://localhost:8080" },
-  { "http://www.nobbb.xx:8000/", "http://localhost:8080" },
-  { "https://nobbb.xx/",         "http://localhost:8080" },
-  { "http://ccc.xx/",          	 "direct://" },
-  { "http://www.ccc.xx/",      	 "direct://" },
-  { "http://ccc.xx:8000/",     	 "direct://" },
-  { "http://www.ccc.xx:8000/", 	 "direct://" },
-  { "https://ccc.xx/",         	 "direct://" },
-  { "http://ddd.xx/",          	 "direct://" },
-  { "http://ddd.xx:8000/",     	 "direct://" },
-  { "http://www.ddd.xx/",      	 "direct://" },
-  { "http://www.ddd.xx:8000/", 	 "direct://" },
-  { "https://ddd.xx/",         	 "direct://" },
-  { "http://eee.xx/",          	 "http://localhost:8080" },
-  { "http://eee.xx:8000/",     	 "direct://" },
-  { "http://www.eee.xx/",      	 "http://localhost:8080" },
-  { "http://www.eee.xx:8000/", 	 "direct://" },
-  { "https://eee.xx/",         	 "http://localhost:8080" },
-  { "http://1.2.3.4/",         	 "http://localhost:8080" },
-  { "http://127.0.0.1/",       	 "direct://" },
-  { "http://127.0.0.2/",       	 "direct://" },
-  { "http://127.0.0.255/",     	 "direct://" },
-  { "http://127.0.1.0/",       	 "http://localhost:8080" },
-  { "http://10.0.0.1/",        	 "http://localhost:8080" },
-  { "http://10.0.0.1:8000/",   	 "direct://" },
-  { "http://[::1]/",           	 "direct://" },
-  { "http://[::1]:80/",        	 "direct://" },
-  { "http://[::1:1]/",         	 "http://localhost:8080" },
-  { "http://[::1:1]:80/",      	 "http://localhost:8080" },
-  { "http://[fe80::1]/",       	 "direct://" },
-  { "http://[fe80::1]:80/",    	 "direct://" },
-  { "http://[fec0::1]/",       	 "http://localhost:8080" },
-  { "http://[fec0::1]:80/",    	 "http://localhost:8080" }
-};
-static const int n_ignore_tests = G_N_ELEMENTS (ignore_tests);
+  settings = g_settings_new (GNOME_PROXY_SETTINGS_SCHEMA);
+  g_settings_reset (settings, GNOME_PROXY_MODE_KEY);
+  g_settings_reset (settings, GNOME_PROXY_USE_SAME_PROXY_KEY);
+
+  child = g_settings_get_child (settings, GNOME_PROXY_HTTP_CHILD_SCHEMA);
+  g_settings_reset (child, GNOME_PROXY_HTTP_HOST_KEY);
+  g_settings_reset (child, GNOME_PROXY_HTTP_PORT_KEY);
+  g_object_unref (child);
+
+  child = g_settings_get_child (settings, GNOME_PROXY_HTTPS_CHILD_SCHEMA);
+  g_settings_reset (child, GNOME_PROXY_HTTPS_HOST_KEY);
+  g_settings_reset (child, GNOME_PROXY_HTTPS_PORT_KEY);
+  g_object_unref (child);
+
+  child = g_settings_get_child (settings, GNOME_PROXY_FTP_CHILD_SCHEMA);
+  g_settings_reset (child, GNOME_PROXY_FTP_HOST_KEY);
+  g_settings_reset (child, GNOME_PROXY_FTP_PORT_KEY);
+  g_object_unref (child);
+
+  child = g_settings_get_child (settings, GNOME_PROXY_SOCKS_CHILD_SCHEMA);
+  g_settings_reset (child, GNOME_PROXY_SOCKS_HOST_KEY);
+  g_settings_reset (child, GNOME_PROXY_SOCKS_PORT_KEY);
+  g_object_unref (child);
+
+  g_object_unref (settings);
+}
 
 static void
-test_proxy_ignore (void)
+test_proxy_uri (gpointer      fixture,
+		gconstpointer user_data)
+{
+  GSettings *settings, *child;
+
+  settings = g_settings_new (GNOME_PROXY_SETTINGS_SCHEMA);
+  g_settings_set_enum (settings, GNOME_PROXY_MODE_KEY, G_DESKTOP_PROXY_MODE_MANUAL);
+  g_settings_set_boolean (settings, GNOME_PROXY_USE_SAME_PROXY_KEY, TRUE);
+
+  child = g_settings_get_child (settings, GNOME_PROXY_HTTP_CHILD_SCHEMA);
+  g_settings_set_string (child, GNOME_PROXY_HTTP_HOST_KEY, "proxy.example.com");
+  g_settings_set_int (child, GNOME_PROXY_HTTP_PORT_KEY, 8080);
+  g_object_unref (child);
+
+  child = g_settings_get_child (settings, GNOME_PROXY_HTTPS_CHILD_SCHEMA);
+  g_settings_set_string (child, GNOME_PROXY_HTTPS_HOST_KEY, "proxy-s.example.com");
+  g_settings_set_int (child, GNOME_PROXY_HTTPS_PORT_KEY, 7070);
+  g_object_unref (child);
+
+  child = g_settings_get_child (settings, GNOME_PROXY_FTP_CHILD_SCHEMA);
+  g_settings_set_string (child, GNOME_PROXY_FTP_HOST_KEY, "proxy-f.example.com");
+  g_settings_set_int (child, GNOME_PROXY_FTP_PORT_KEY, 6060);
+  g_object_unref (child);
+
+  g_object_unref (settings);
+
+  test_proxy_uri_common ();
+}
+
+static void
+test_proxy_socks (gpointer      fixture,
+		  gconstpointer user_data)
+{
+  GSettings *settings, *child;
+  const gchar *ignore_hosts[2] = { "127.0.0.1", NULL };
+
+  settings = g_settings_new (GNOME_PROXY_SETTINGS_SCHEMA);
+  g_settings_set_enum (settings, GNOME_PROXY_MODE_KEY, G_DESKTOP_PROXY_MODE_MANUAL);
+  g_settings_set (settings, GNOME_PROXY_IGNORE_HOSTS_KEY,
+		  "@as", g_variant_new_strv (ignore_hosts, -1));
+
+  child = g_settings_get_child (settings, GNOME_PROXY_SOCKS_CHILD_SCHEMA);
+  g_settings_set_string (child, GNOME_PROXY_SOCKS_HOST_KEY, "proxy.example.com");
+  g_settings_set_int (child, GNOME_PROXY_SOCKS_PORT_KEY, 1234);
+  g_object_unref (child);
+  g_object_unref (settings);
+
+  test_proxy_socks_common ();
+}
+
+static void
+test_proxy_ignore (gpointer      fixture,
+		   gconstpointer user_data)
 {
   GSettings *settings, *http;
-  GProxyResolver *resolver;
-  GError *error = NULL;
-  char **proxies;
-  int i;
 
   settings = g_settings_new (GNOME_PROXY_SETTINGS_SCHEMA);
   g_settings_set_enum (settings, GNOME_PROXY_MODE_KEY, G_DESKTOP_PROXY_MODE_MANUAL);
@@ -127,31 +146,29 @@ test_proxy_ignore (void)
   g_settings_set_string (http, GNOME_PROXY_HTTP_HOST_KEY, "localhost");
   g_settings_set_int (http, GNOME_PROXY_HTTP_PORT_KEY, 8080);
 
-  resolver = g_proxy_resolver_get_default ();
+  g_object_unref (http);
+  g_object_unref (settings);
 
-  for (i = 0; i < n_ignore_tests; i++)
-    {
-      proxies = g_proxy_resolver_lookup (resolver, ignore_tests[i].uri,
-					 NULL, &error);
-      g_assert_no_error (error);
-
-      g_assert_cmpstr (proxies[0], ==, ignore_tests[i].proxy);
-      g_strfreev (proxies);
-    }
+  test_proxy_ignore_common (FALSE);
 }
 
 int
 main (int   argc,
       char *argv[])
 {
-  g_type_init ();
   g_test_init (&argc, &argv, NULL);
 
   g_setenv ("GIO_EXTRA_MODULES", TOP_BUILDDIR "/proxy/gnome/.libs", TRUE);
   g_setenv ("GIO_USE_PROXY_RESOLVER", "gnome", TRUE);
   g_setenv ("GSETTINGS_BACKEND", "memory", TRUE);
+  g_setenv ("DESKTOP_SESSION", "gnome", TRUE);
 
-  g_test_add_func ("/proxy/gnome/ignore", test_proxy_ignore);
+  g_test_add_vtable ("/proxy/gnome/uri", 0, NULL,
+		     reset_proxy_settings, test_proxy_uri, NULL);
+  g_test_add_vtable ("/proxy/gnome/socks", 0, NULL,
+		     reset_proxy_settings, test_proxy_socks, NULL);
+  g_test_add_vtable ("/proxy/gnome/ignore", 0, NULL,
+		     reset_proxy_settings, test_proxy_ignore, NULL);
 
   return g_test_run();
 }
